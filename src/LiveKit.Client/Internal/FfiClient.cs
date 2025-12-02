@@ -19,7 +19,28 @@ namespace LiveKit.Internal
         public event TrackEventReceivedDelegate? TrackEventReceived;
         public event PublishTrackDelegate? PublishTrackReceived;
         public event UnpublishTrackDelegate? UnpublishTrackReceived;
-
+        public event VideoStreamEventReceivedDelegate? VideoStreamEventReceived;
+        public event AudioStreamEventReceivedDelegate? AudioStreamEventReceived;
+        public event RpcMethodInvocationReceivedDelegate? RpcMethodInvocationReceived;
+        public event GetSessionStatsDelegate? GetSessionStatsReceived;
+        public event SetLocalMetadataReceivedDelegate? SetLocalMetadataReceived;
+        public event SetLocalNameReceivedDelegate? SetLocalNameReceived;
+        public event SetLocalAttributesReceivedDelegate? SetLocalAttributesReceived;
+        public event CaptureAudioFrameReceivedDelegate? CaptureAudioFrameReceived;
+        public event PerformRpcReceivedDelegate? PerformRpcReceived;
+        public event ByteStreamReaderEventReceivedDelegate? ByteStreamReaderEventReceived;
+        public event ByteStreamReaderReadAllReceivedDelegate? ByteStreamReaderReadAllReceived;
+        public event ByteStreamReaderWriteToFileReceivedDelegate? ByteStreamReaderWriteToFileReceived;
+        public event ByteStreamOpenReceivedDelegate? ByteStreamOpenReceived;
+        public event ByteStreamWriterWriteReceivedDelegate? ByteStreamWriterWriteReceived;
+        public event ByteStreamWriterCloseReceivedDelegate? ByteStreamWriterCloseReceived;
+        public event SendFileReceivedDelegate? SendFileReceived;
+        public event TextStreamReaderEventReceivedDelegate? TextStreamReaderEventReceived;
+        public event TextStreamReaderReadAllReceivedDelegate? TextStreamReaderReadAllReceived;
+        public event TextStreamOpenReceivedDelegate? TextStreamOpenReceived;
+        public event TextStreamWriterWriteReceivedDelegate? TextStreamWriterWriteReceived;
+        public event TextStreamWriterCloseReceivedDelegate? TextStreamWriterCloseReceived;
+        public event SendTextReceivedDelegate? SendTextReceived;
         private FfiClient() { }
 
         public void Initialize()
@@ -90,6 +111,72 @@ namespace LiveKit.Internal
                     break;
                 case FfiEvent.MessageOneofCase.UnpublishTrack:
                     Instance.UnpublishTrackReceived?.Invoke(response.UnpublishTrack);
+                    break;
+                case FfiEvent.MessageOneofCase.VideoStreamEvent:
+                    Instance.VideoStreamEventReceived?.Invoke(response.VideoStreamEvent);
+                    break;
+                case FfiEvent.MessageOneofCase.AudioStreamEvent:
+                    Instance.AudioStreamEventReceived?.Invoke(response.AudioStreamEvent);
+                    break;
+                case FfiEvent.MessageOneofCase.RpcMethodInvocation:
+                    Instance.RpcMethodInvocationReceived?.Invoke(response.RpcMethodInvocation);
+                    break;
+                case FfiEvent.MessageOneofCase.GetSessionStats:
+                    Instance.GetSessionStatsReceived?.Invoke(response.GetSessionStats);
+                    break;
+                case FfiEvent.MessageOneofCase.SetLocalMetadata:
+                    Instance.SetLocalMetadataReceived?.Invoke(response.SetLocalMetadata);
+                    break;
+                case FfiEvent.MessageOneofCase.SetLocalName:
+                    Instance.SetLocalNameReceived?.Invoke(response.SetLocalName);
+                    break;
+                case FfiEvent.MessageOneofCase.SetLocalAttributes:
+                    Instance.SetLocalAttributesReceived?.Invoke(response.SetLocalAttributes);
+                    break;
+                case FfiEvent.MessageOneofCase.CaptureAudioFrame:
+                    Instance.CaptureAudioFrameReceived?.Invoke(response.CaptureAudioFrame);
+                    break;
+                case FfiEvent.MessageOneofCase.PerformRpc:
+                    Instance.PerformRpcReceived?.Invoke(response.PerformRpc);
+                    break;
+                case FfiEvent.MessageOneofCase.ByteStreamReaderEvent:
+                    Instance.ByteStreamReaderEventReceived?.Invoke(response.ByteStreamReaderEvent);
+                    break;
+                case FfiEvent.MessageOneofCase.ByteStreamReaderReadAll:
+                    Instance.ByteStreamReaderReadAllReceived?.Invoke(response.ByteStreamReaderReadAll);
+                    break;
+                case FfiEvent.MessageOneofCase.ByteStreamReaderWriteToFile:
+                    Instance.ByteStreamReaderWriteToFileReceived?.Invoke(response.ByteStreamReaderWriteToFile);
+                    break;
+                case FfiEvent.MessageOneofCase.ByteStreamOpen:
+                    Instance.ByteStreamOpenReceived?.Invoke(response.ByteStreamOpen);
+                    break;
+                case FfiEvent.MessageOneofCase.ByteStreamWriterWrite:
+                    Instance.ByteStreamWriterWriteReceived?.Invoke(response.ByteStreamWriterWrite);
+                    break;
+                case FfiEvent.MessageOneofCase.ByteStreamWriterClose:
+                    Instance.ByteStreamWriterCloseReceived?.Invoke(response.ByteStreamWriterClose);
+                    break;
+                case FfiEvent.MessageOneofCase.SendFile:
+                    Instance.SendFileReceived?.Invoke(response.SendFile);
+                    break;
+                case FfiEvent.MessageOneofCase.TextStreamReaderEvent:
+                    Instance.TextStreamReaderEventReceived?.Invoke(response.TextStreamReaderEvent);
+                    break;
+                case FfiEvent.MessageOneofCase.TextStreamReaderReadAll:
+                    Instance.TextStreamReaderReadAllReceived?.Invoke(response.TextStreamReaderReadAll);
+                    break;
+                case FfiEvent.MessageOneofCase.TextStreamOpen:
+                    Instance.TextStreamOpenReceived?.Invoke(response.TextStreamOpen);
+                    break;
+                case FfiEvent.MessageOneofCase.TextStreamWriterWrite:
+                    Instance.TextStreamWriterWriteReceived?.Invoke(response.TextStreamWriterWrite);
+                    break;
+                case FfiEvent.MessageOneofCase.TextStreamWriterClose:
+                    Instance.TextStreamWriterCloseReceived?.Invoke(response.TextStreamWriterClose);
+                    break;
+                case FfiEvent.MessageOneofCase.SendText:
+                    Instance.SendTextReceived?.Invoke(response.SendText);
                     break;
                 case FfiEvent.MessageOneofCase.Logs:
                     // Console.WriteLine("Log received");

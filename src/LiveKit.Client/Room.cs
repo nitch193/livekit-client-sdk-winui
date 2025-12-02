@@ -12,6 +12,13 @@ namespace LiveKit
         private ulong _roomHandle;
         private ulong _localParticipantHandle;
 
+        public ulong LocalParticipantHandle => _localParticipantHandle;
+        private TaskCompletionSource<TrackPublication>? _publishTrackTcs;
+        private TaskCompletionSource<bool>? _unpublishTrackTcs;
+        private TaskCompletionSource<bool>? _setMetadataTcs;
+        private TaskCompletionSource<bool>? _setNameTcs;
+        private TaskCompletionSource<bool>? _setAttributesTcs;
+
         public Room()
         {
             _client = FfiClient.Instance;
@@ -19,6 +26,15 @@ namespace LiveKit
             _client.ConnectReceived += OnConnectReceived;
             _client.DisconnectReceived += OnDisconnectReceived;
             _client.RoomEventReceived += OnRoomEventReceived;
+            _client.PublishTrackReceived += OnPublishTrackReceived;
+            _client.UnpublishTrackReceived += OnUnpublishTrackReceived;
+            _client.TrackEventReceived += OnTrackEventReceived;
+            _client.SetLocalMetadataReceived += OnSetLocalMetadataReceived;
+            _client.SetLocalNameReceived += OnSetLocalNameReceived;
+            _client.SetLocalAttributesReceived += OnSetLocalAttributesReceived;
+            _client.GetSessionStatsReceived += OnGetSessionStatsReceived;
+            _client.PerformRpcReceived += OnPerformRpcReceived;
+            _client.RpcMethodInvocationReceived += OnRpcMethodInvocationReceived;
         }
 
         public Task ConnectAsync(string url, string token)
@@ -63,10 +79,12 @@ namespace LiveKit
         /// <summary>
         /// Publishes a local video track to the room.
         /// </summary>
-        public async Task<TrackPublication> PublishTrackAsync(LocalVideoTrack track)
+        public Task<TrackPublication> PublishTrackAsync(LocalVideoTrack track)
         {
             if (_localParticipantHandle == 0)
                 throw new InvalidOperationException("Not connected to a room");
+
+            _publishTrackTcs = new TaskCompletionSource<TrackPublication>();
 
             var request = new FfiRequest
             {
@@ -88,10 +106,7 @@ namespace LiveKit
                 throw new Exception("Failed to publish track");
             }
 
-            // For now, return a simple wrapper. In a full implementation,
-            // we'd wait for the PublishTrackCallback
-            await Task.Delay(100); // Give it time to publish
-            return new TrackPublication(response.PublishTrack.AsyncId);
+            return _publishTrackTcs.Task;
         }
 
         private void OnConnectReceived(ConnectCallback e)
@@ -123,6 +138,96 @@ namespace LiveKit
             {
                 Console.WriteLine($"Participant Connected: {e.ParticipantConnected.Info.Info.Identity}");
             }
+        }
+
+        private void OnPublishTrackReceived(PublishTrackCallback e)
+        {
+            if (!string.IsNullOrEmpty(e.Error))
+            {
+                _publishTrackTcs?.TrySetException(new Exception(e.Error));
+            }
+            else
+            {
+                var publication = new TrackPublication(e.AsyncId);
+                _publishTrackTcs?.TrySetResult(publication);
+                Console.WriteLine($"Track published successfully");
+            }
+        }
+
+        private void OnUnpublishTrackReceived(UnpublishTrackCallback e)
+        {
+            if (!string.IsNullOrEmpty(e.Error))
+            {
+                _unpublishTrackTcs?.TrySetException(new Exception(e.Error));
+            }
+            else
+            {
+                _unpublishTrackTcs?.TrySetResult(true);
+                Console.WriteLine("Track unpublished");
+            }
+        }
+
+        private void OnTrackEventReceived(TrackEvent e)
+        {
+            Console.WriteLine("Track event received");
+            // Handle track subscribed, unsubscribed, muted, etc.
+        }
+
+        private void OnSetLocalMetadataReceived(SetLocalMetadataCallback e)
+        {
+            if (!string.IsNullOrEmpty(e.Error))
+            {
+                _setMetadataTcs?.TrySetException(new Exception(e.Error));
+            }
+            else
+            {
+                _setMetadataTcs?.TrySetResult(true);
+                Console.WriteLine("Local metadata set");
+            }
+        }
+
+        private void OnSetLocalNameReceived(SetLocalNameCallback e)
+        {
+            if (!string.IsNullOrEmpty(e.Error))
+            {
+                _setNameTcs?.TrySetException(new Exception(e.Error));
+            }
+            else
+            {
+                _setNameTcs?.TrySetResult(true);
+                Console.WriteLine("Local name set");
+            }
+        }
+
+        private void OnSetLocalAttributesReceived(SetLocalAttributesCallback e)
+        {
+            if (!string.IsNullOrEmpty(e.Error))
+            {
+                _setAttributesTcs?.TrySetException(new Exception(e.Error));
+            }
+            else
+            {
+                _setAttributesTcs?.TrySetResult(true);
+                Console.WriteLine("Local attributes set");
+            }
+        }
+
+        private void OnGetSessionStatsReceived(GetSessionStatsCallback e)
+        {
+            Console.WriteLine("Session stats received");
+            // Handle session statistics
+        }
+
+        private void OnPerformRpcReceived(PerformRpcCallback e)
+        {
+            Console.WriteLine($"RPC completed: {e.AsyncId}");
+            // Handle RPC completion
+        }
+
+        private void OnRpcMethodInvocationReceived(RpcMethodInvocationEvent e)
+        {
+            Console.WriteLine($"RPC method invocation: {e.InvocationId}");
+            // Handle incoming RPC calls
         }
     }
 }

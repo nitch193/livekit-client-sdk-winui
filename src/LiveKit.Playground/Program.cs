@@ -1,18 +1,23 @@
 using System;
 using System.Threading.Tasks;
 using LiveKit;
+using LiveKit.Proto;
+using DataStream = LiveKit.DataStream;
 
 class Program
 {
+    static Room? room;
+    static DataStream? dataStream;
+
     static async Task Main(string[] args)
     {
-        Console.WriteLine("LiveKit WinUI Playground");
+        Console.WriteLine("LiveKit WinUI Playground - Event Listener Mode");
         
-        var room = new Room();
+        room = new Room();
         
         // Replace with valid URL and Token
         string url = "wss://test-project-znb5n0y7.livekit.cloud";
-        string token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjQ1MzIwMzAsImlkZW50aXR5IjoibWF4IiwiaXNzIjoiQVBJbVI5a1NRTlRqaXpoIiwibmJmIjoxNzY0NTMxMTMwLCJzdWIiOiJtYXgiLCJ2aWRlbyI6eyJjYW5QdWJsaXNoIjp0cnVlLCJjYW5QdWJsaXNoRGF0YSI6dHJ1ZSwiY2FuU3Vic2NyaWJlIjp0cnVlLCJyb29tIjoidGVzdC1yb29tIiwicm9vbUpvaW4iOnRydWV9fQ.Qz56HI3q9yCg3wf8xNICf0UbhORjlittp_vXFm7zbOw";
+        string token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjQ3MDA0MjQsImlkZW50aXR5Ijoibml0ZXNoIiwiaXNzIjoiQVBJbVI5a1NRTlRqaXpoIiwibmJmIjoxNzY0Njk5NTI0LCJzdWIiOiJuaXRlc2giLCJ2aWRlbyI6eyJjYW5QdWJsaXNoIjp0cnVlLCJjYW5QdWJsaXNoRGF0YSI6dHJ1ZSwiY2FuU3Vic2NyaWJlIjp0cnVlLCJyb29tIjoidGVzdC1yb29tIiwicm9vbUpvaW4iOnRydWV9fQ.7j1NTGTWBdclCDZPIosm5uaMEcYmJ0G_NnTY3Of0BgI";
 
         if (args.Length >= 2)
         {
@@ -20,43 +25,55 @@ class Program
             token = args[1];
         }
 
-        Console.WriteLine($"Connecting to {url}...");
-        try 
+        try
         {
-            // Note: This will fail if the native library is not found or if URL/Token are invalid.
+            Console.WriteLine($"Connecting to {url}...");
             await room.ConnectAsync(url, token);
             Console.WriteLine("Successfully connected!");
+
+            // Initialize DataStream
+            dataStream = new DataStream(room.LocalParticipantHandle);
             
-            // Start screen sharing
-            Console.WriteLine("Starting screen share...");
-            var screenTrack = LocalVideoTrack.CreateScreenShareTrack(1280, 720);
-            var capturer = new ScreenCapturer(screenTrack.Source, 1280, 720, fps: 15);
+            // Subscribe to events
+            dataStream.TextStreamReaderEvent += OnTextStreamReceived;
+            dataStream.ByteStreamReaderEvent += OnByteStreamReceived;
             
-            try
-            {
-                await room.PublishTrackAsync(screenTrack);
-                Console.WriteLine("Screen share track published!");
-                
-                capturer.Start();
-                Console.WriteLine("Screen capture started. Sending test pattern...");
-                
-                Console.WriteLine("Press Enter to stop screen sharing and disconnect...");
-                Console.ReadLine();
-                
-                await capturer.StopAsync();
-                Console.WriteLine("Screen capture stopped");
-            }
-            finally
-            {
-                screenTrack.Dispose();
-                capturer.Dispose();
-            }
+            Console.WriteLine("DataStream initialized. Listening for events...");
+            Console.WriteLine("Press Enter to disconnect and exit...");
             
+            // Keep the application running until user presses Enter
+            Console.ReadLine();
+
             await room.DisconnectAsync();
+            Console.WriteLine("Disconnected.");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error: {ex.Message}");
+        }
+    }
+
+    static void OnTextStreamReceived(TextStreamReaderEvent e)
+    {
+        Console.WriteLine($"[Text Stream Event] {e}");
+        // You can inspect e.Content, e.Topic, etc. here depending on the specific event type
+    }
+
+    static void OnByteStreamReceived(ByteStreamReaderEvent e)
+    {
+        Console.WriteLine($"[Byte Stream Event] {e.DetailCase}");
+        
+        if (e.DetailCase == ByteStreamReaderEvent.DetailOneofCase.ChunkReceived)
+        {
+            var content = e.ChunkReceived.Content.ToByteArray();
+            Console.WriteLine($"Received chunk: {content.Length} bytes");
+        //If you know it's text, you can convert it:
+            var text = System.Text.Encoding.UTF8.GetString(content);
+            Console.WriteLine($"Content: {text}");
+        }
+        else if (e.DetailCase == ByteStreamReaderEvent.DetailOneofCase.Eos)
+        {
+            Console.WriteLine("End of stream received");
         }
     }
 }

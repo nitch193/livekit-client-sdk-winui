@@ -20,7 +20,7 @@ namespace LiveKit.Internal
 
     internal delegate void DisconnectReceivedDelegate(DisconnectCallback e);
 
-    internal delegate void GetSessionStatsDelegate(GetStatsCallback e);
+    internal delegate void GetSessionStatsDelegate(GetSessionStatsCallback e);
 
     internal delegate void SetLocalMetadataReceivedDelegate(SetLocalMetadataCallback e);
     internal delegate void SetLocalNameReceivedDelegate(SetLocalNameCallback e);
