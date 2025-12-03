@@ -37,6 +37,13 @@ class Program
             // Subscribe to events
             dataStream.TextStreamReaderEvent += OnTextStreamReceived;
             dataStream.ByteStreamReaderEvent += OnByteStreamReceived;
+
+            room.RoomEvent += OnRoomEvent;
+            room.TrackEvent += OnTrackEvent;
+            room.DataReceived += OnDataReceived;
+            room.ChatMessageReceived += OnChatMessageReceived;
+            room.VideoStreamEvent += OnVideoStreamEvent;
+            room.AudioStreamEvent += OnAudioStreamEvent;
             
             Console.WriteLine("DataStream initialized. Listening for events...");
 
@@ -87,5 +94,35 @@ class Program
         {
             Console.WriteLine("End of stream received");
         }
+    }
+
+    static void OnRoomEvent(RoomEvent e)
+    {
+        Console.WriteLine($"[Room Event] {e.MessageCase}");
+    }
+
+    static void OnTrackEvent(TrackEvent e)
+    {
+        Console.WriteLine($"[Track Event] Received");
+    }
+
+    static void OnDataReceived(DataPacketReceived e)
+    {
+        Console.WriteLine($"[Data Received] Kind: {e.Kind}, Topic: {e.User.Topic}");
+    }
+
+    static void OnChatMessageReceived(ChatMessageReceived e)
+    {
+        Console.WriteLine($"[Chat Message] From: {e.ParticipantIdentity}, Message: {e.Message.Message}");
+    }
+
+    static void OnVideoStreamEvent(VideoStreamEvent e)
+    {
+        Console.WriteLine($"[Video Stream Event] {e.MessageCase}");
+    }
+
+    static void OnAudioStreamEvent(AudioStreamEvent e)
+    {
+        Console.WriteLine($"[Audio Stream Event] {e.MessageCase}");
     }
 }
