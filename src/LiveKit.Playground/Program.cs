@@ -39,11 +39,23 @@ class Program
             dataStream.ByteStreamReaderEvent += OnByteStreamReceived;
             
             Console.WriteLine("DataStream initialized. Listening for events...");
+
+            // Start Screen Capture
+            Console.WriteLine("Starting Screen Capture...");
+            var track = LocalVideoTrack.CreateScreenShareTrack();
+            var capturer = new ScreenCapturer(track.Source);
+            capturer.Start();
+            
+            await room.PublishTrackAsync(track);
+            Console.WriteLine("Screen Share Track Published!");
+            
             Console.WriteLine("Press Enter to disconnect and exit...");
             
             // Keep the application running until user presses Enter
             Console.ReadLine();
 
+            capturer.Dispose();
+            track.Dispose();
             await room.DisconnectAsync();
             Console.WriteLine("Disconnected.");
         }

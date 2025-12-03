@@ -1,0 +1,13 @@
+/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/obj/Debug/net8.0-windows10.0.19041.0/LiveKit.Client.csproj.AssemblyReference.cache
+/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/obj/Debug/net8.0-windows10.0.19041.0/LiveKit.Client.GeneratedMSBuildEditorConfig.editorconfig
+/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/obj/Debug/net8.0-windows10.0.19041.0/LiveKit.Client.AssemblyInfoInputs.cache
+/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/obj/Debug/net8.0-windows10.0.19041.0/LiveKit.Client.AssemblyInfo.cs
+/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/obj/Debug/net8.0-windows10.0.19041.0/LiveKit.Client.csproj.CoreCompileInputs.cache
+/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/obj/Debug/net8.0-windows10.0.19041.0/LiveKit.Client.sourcelink.json
+/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/bin/Debug/net8.0-windows10.0.19041.0/LiveKit.Client.deps.json
+/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/bin/Debug/net8.0-windows10.0.19041.0/LiveKit.Client.dll
+/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/bin/Debug/net8.0-windows10.0.19041.0/LiveKit.Client.pdb
+/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/obj/Debug/net8.0-windows10.0.19041.0/LiveKit.Client.dll
+/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/obj/Debug/net8.0-windows10.0.19041.0/refint/LiveKit.Client.dll
+/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/obj/Debug/net8.0-windows10.0.19041.0/LiveKit.Client.pdb
+/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/obj/Debug/net8.0-windows10.0.19041.0/ref/LiveKit.Client.dll

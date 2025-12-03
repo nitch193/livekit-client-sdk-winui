@@ -1,0 +1,80 @@
+{
+  "format": 1,
+  "restore": {
+    "/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/LiveKit.Client.csproj": {}
+  },
+  "projects": {
+    "/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/LiveKit.Client.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/LiveKit.Client.csproj",
+        "projectName": "LiveKit.Client",
+        "projectPath": "/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/LiveKit.Client.csproj",
+        "packagesPath": "/home/nitesh/.nuget/packages/",
+        "outputPath": "/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/obj/",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "/home/nitesh/.nuget/NuGet/NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0-windows10.0.19041.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0-windows10.0.19041": {
+            "targetAlias": "net8.0-windows10.0.19041.0",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        }
+      },
+      "frameworks": {
+        "net8.0-windows10.0.19041": {
+          "targetAlias": "net8.0-windows10.0.19041.0",
+          "dependencies": {
+            "Google.Protobuf": {
+              "target": "Package",
+              "version": "[3.25.1, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "downloadDependencies": [
+            {
+              "name": "Microsoft.Windows.SDK.NET.Ref",
+              "version": "[10.0.19041.56, 10.0.19041.56]"
+            },
+            {
+              "name": "Microsoft.WindowsDesktop.App.Ref",
+              "version": "[8.0.21, 8.0.21]"
+            }
+          ],
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            },
+            "Microsoft.Windows.SDK.NET.Ref": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "/usr/lib/dotnet/sdk/8.0.121/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}

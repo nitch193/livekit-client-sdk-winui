@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "dgSpecHash": "NgyaDQ+Tmqyd4DagJtOzM4mclJmoBuoWd+9YLWF8U72lwaqq3aslUVibyzkHbNmTldovQKzt1ZVv6DF4YxSdQA==",
+  "success": true,
+  "projectFilePath": "/home/nitesh/.gemini/antigravity/scratch/livekit-winui/src/LiveKit.Client/LiveKit.Client.csproj",
+  "expectedPackageFiles": [
+    "/home/nitesh/.nuget/packages/google.protobuf/3.25.1/google.protobuf.3.25.1.nupkg.sha512",
+    "/home/nitesh/.nuget/packages/microsoft.windowsdesktop.app.ref/8.0.21/microsoft.windowsdesktop.app.ref.8.0.21.nupkg.sha512",
+    "/home/nitesh/.nuget/packages/microsoft.windows.sdk.net.ref/10.0.19041.56/microsoft.windows.sdk.net.ref.10.0.19041.56.nupkg.sha512"
+  ],
+  "logs": []
+}
