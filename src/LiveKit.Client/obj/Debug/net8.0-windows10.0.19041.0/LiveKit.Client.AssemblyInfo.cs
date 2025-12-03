@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("LiveKit.Client")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+9d6bcce8c02bfd01ead33a6bbc1846f3ee1a98c5")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+4cd24a7963d757e9d8d0ca1e879a0c80be841ae0")]
 [assembly: System.Reflection.AssemblyProductAttribute("LiveKit.Client")]
 [assembly: System.Reflection.AssemblyTitleAttribute("LiveKit.Client")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
