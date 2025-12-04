@@ -265,39 +265,46 @@ namespace LiveKit
 
         private GraphicsCaptureItem CreateItemForMonitor(IntPtr hmon)
         {
-            // We need to get the activation factory for GraphicsCaptureItem to use the interop interface.
+            // Create HSTRING for the activatable class ID
             var activatableId = "Windows.Graphics.Capture.GraphicsCaptureItem";
-            var iidUnknown = Guid.Parse("00000000-0000-0000-C000-000000000046"); // IUnknown
+            WindowsCreateString(activatableId, (uint)activatableId.Length, out var hstringPtr);
             
-            RoGetActivationFactory(activatableId, ref iidUnknown, out var factoryPtr);
-            
-            var interop = (D3D11Interop.IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
-            var itemGuid = typeof(GraphicsCaptureItem).GUID; // This might be the interface GUID
-            // Actually, we want the object back.
-            // The GUID to pass to CreateForMonitor is usually the IID of IGraphicsCaptureItem (79C3F95B-31F7-4EC2-A464-632EF5D30760)
-            
-            var iGraphicsCaptureItemIID = Guid.Parse("79C3F95B-31F7-4EC2-A464-632EF5D30760");
-            var itemPtr = interop.CreateForMonitor(hmon, ref iGraphicsCaptureItemIID);
-            
-            var item = Windows.Graphics.Capture.GraphicsCaptureItem.FromAbi(itemPtr);
-            
-            Marshal.Release(factoryPtr);
-            // Marshal.Release(itemPtr); // FromAbi might take ownership or we might need to release? 
-            // Usually FromAbi creates an RCW. We should probably release the raw ptr if FromAbi adds ref.
-            // But FromAbi is internal? No, in C# projection it's usually `FromAbi` or we just marshal.
-            
-            // Wait, `GraphicsCaptureItem` is a sealed class.
-            // We can just use `Marshal.GetObjectForIUnknown(itemPtr)` and cast to `GraphicsCaptureItem`.
-            
-            var captureItem = (GraphicsCaptureItem)Marshal.GetObjectForIUnknown(itemPtr);
-            Marshal.Release(itemPtr);
-            
-            return captureItem;
+            try
+            {
+                var iidUnknown = Guid.Parse("00000000-0000-0000-C000-000000000046"); // IUnknown
+                
+                RoGetActivationFactory(hstringPtr, ref iidUnknown, out var factoryPtr);
+                
+                var interop = (D3D11Interop.IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
+                var iGraphicsCaptureItemIID = Guid.Parse("79C3F95B-31F7-4EC2-A464-632EF5D30760");
+                var itemPtr = interop.CreateForMonitor(hmon, ref iGraphicsCaptureItemIID);
+                
+                var captureItem = (GraphicsCaptureItem)Marshal.GetObjectForIUnknown(itemPtr);
+                
+                Marshal.Release(itemPtr);
+                Marshal.Release(factoryPtr);
+                
+                return captureItem;
+            }
+            finally
+            {
+                // Clean up the HSTRING
+                WindowsDeleteString(hstringPtr);
+            }
         }
+
+        [DllImport("api-ms-win-core-winrt-string-l1-1-0.dll", CharSet = CharSet.Unicode)]
+        private static extern int WindowsCreateString(
+            [MarshalAs(UnmanagedType.LPWStr)] string sourceString,
+            uint length,
+            out IntPtr hstring);
+
+        [DllImport("api-ms-win-core-winrt-string-l1-1-0.dll")]
+        private static extern int WindowsDeleteString(IntPtr hstring);
 
         [DllImport("api-ms-win-core-winrt-l1-1-0.dll")]
         private static extern int RoGetActivationFactory(
-            [MarshalAs(UnmanagedType.HString)] string activatableClassId,
+            IntPtr activatableClassId,
             [In] ref Guid iid,
             [Out] out IntPtr factory);
 
