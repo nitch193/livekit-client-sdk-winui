@@ -6,7 +6,7 @@ namespace LiveKit.Internal
     internal static class D3D11Interop
     {
         [ComImport]
-        [Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356")]
+        [Guid("A37624AB-8D5F-4650-903E-9EAE3D9BC670")]
         [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         public interface IGraphicsCaptureItemInterop
         {

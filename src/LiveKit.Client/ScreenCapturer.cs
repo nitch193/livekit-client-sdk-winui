@@ -272,7 +272,7 @@ namespace LiveKit
             try
             {
                 // Query for IGraphicsCaptureItemInterop interface
-                var iGraphicsCaptureItemInteropGuid = Guid.Parse("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356");
+                var iGraphicsCaptureItemInteropGuid = Guid.Parse("A37624AB-8D5F-4650-903E-9EAE3D9BC670");
                 
                 RoGetActivationFactory(hstringPtr, ref iGraphicsCaptureItemInteropGuid, out var factoryPtr);
                 
