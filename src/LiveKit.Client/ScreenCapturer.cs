@@ -279,7 +279,8 @@ namespace LiveKit
                 var iGraphicsCaptureItemIID = Guid.Parse("79C3F95B-31F7-4EC2-A464-632EF5D30760");
                 var itemPtr = interop.CreateForMonitor(hmon, ref iGraphicsCaptureItemIID);
                 
-                var captureItem = (GraphicsCaptureItem)Marshal.GetObjectForIUnknown(itemPtr);
+                // Use WinRT ComWrappersSupport to create the WinRT object from the COM pointer
+                var captureItem = WinRT.ComWrappersSupport.CreateRcwForComObject<GraphicsCaptureItem>(itemPtr);
                 
                 Marshal.Release(itemPtr);
                 Marshal.Release(factoryPtr);
