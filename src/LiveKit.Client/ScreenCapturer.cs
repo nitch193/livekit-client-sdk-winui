@@ -265,55 +265,49 @@ namespace LiveKit
 
         private GraphicsCaptureItem CreateItemForMonitor(IntPtr hmon)
         {
-            // Create HSTRING for the activatable class ID
+            // The IGraphicsCaptureItemInterop is obtained directly from the activation factory
+            // by querying for it with RoGetActivationFactory using the interop GUID
             var activatableId = "Windows.Graphics.Capture.GraphicsCaptureItem";
             WindowsCreateString(activatableId, (uint)activatableId.Length, out var hstringPtr);
             
             try
             {
-                // Query for IUnknown first (activation factories implement IUnknown)
-                var iidUnknown = Guid.Parse("00000000-0000-0000-C000-000000000046");
+                // Get the interop interface directly from the activation factory
+                // This is the documented way to get IGraphicsCaptureItemInterop
+                var iGraphicsCaptureItemInteropGuid = new Guid("A37624AB-8D5F-4650-903E-9EAE3D9BC670");
                 
-                int hr = RoGetActivationFactory(hstringPtr, ref iidUnknown, out var factoryPtr);
+                int hr = RoGetActivationFactory(hstringPtr, ref iGraphicsCaptureItemInteropGuid, out var interopPtr);
                 
-                if (hr != 0 || factoryPtr == IntPtr.Zero)
+                if (hr != 0 || interopPtr == IntPtr.Zero)
                 {
-                    throw new Exception($"RoGetActivationFactory failed with HRESULT: 0x{hr:X8}");
+                    throw new Exception($"Failed to get IGraphicsCaptureItemInterop from activation factory. HRESULT: 0x{hr:X8}");
                 }
                 
-                // Now QueryInterface for IGraphicsCaptureItemInterop
-                var iGraphicsCaptureItemInteropGuid = Guid.Parse("A37624AB-8D5F-4650-903E-9EAE3D9BC670");
-                Marshal.QueryInterface(factoryPtr, ref iGraphicsCaptureItemInteropGuid, out var interopPtr);
-                
-                if (interopPtr == IntPtr.Zero)
+                try
                 {
-                    Marshal.Release(factoryPtr);
-                    throw new Exception("QueryInterface for IGraphicsCaptureItemInterop failed");
+                    var interop = (D3D11Interop.IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(interopPtr);
+                    var iGraphicsCaptureItemIID = new Guid("79C3F95B-31F7-4EC2-A464-632EF5D30760");
+                    var itemPtr = interop.CreateForMonitor(hmon, ref iGraphicsCaptureItemIID);
+                    
+                    if (itemPtr == IntPtr.Zero)
+                    {
+                        throw new Exception("CreateForMonitor returned null. Monitor handle may be invalid.");
+                    }
+                    
+                    // Use WinRT ComWrappersSupport to create the WinRT object from the COM pointer
+                    var captureItem = WinRT.ComWrappersSupport.CreateRcwForComObject<GraphicsCaptureItem>(itemPtr);
+                    
+                    Marshal.Release(itemPtr);
+                    
+                    return captureItem;
                 }
-                
-                var interop = (D3D11Interop.IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(interopPtr);
-                var iGraphicsCaptureItemIID = Guid.Parse("79C3F95B-31F7-4EC2-A464-632EF5D30760");
-                var itemPtr = interop.CreateForMonitor(hmon, ref iGraphicsCaptureItemIID);
-                
-                if (itemPtr == IntPtr.Zero)
+                finally
                 {
                     Marshal.Release(interopPtr);
-                    Marshal.Release(factoryPtr);
-                    throw new Exception("CreateForMonitor returned null pointer. Monitor handle may be invalid.");
                 }
-                
-                // Use WinRT ComWrappersSupport to create the WinRT object from the COM pointer
-                var captureItem = WinRT.ComWrappersSupport.CreateRcwForComObject<GraphicsCaptureItem>(itemPtr);
-                
-                Marshal.Release(itemPtr);
-                Marshal.Release(interopPtr);
-                Marshal.Release(factoryPtr);
-                
-                return captureItem;
             }
             finally
             {
-                // Clean up the HSTRING
                 WindowsDeleteString(hstringPtr);
             }
         }
