@@ -122,10 +122,10 @@ namespace LiveKit
             _d3dDevice.CreateTexture2D(ref desc, IntPtr.Zero, out stagingTexture);
 
             // Copy to staging
-            _d3dContext.CopyResource((D3D11Interop.ID3D11Resource)stagingTexture, (D3D11Interop.ID3D11Resource)texture);
+            _d3dContext.CopyResource(stagingTexture, texture);
 
             // Map the staging texture
-            _d3dContext.Map((D3D11Interop.ID3D11Resource)stagingTexture, 0, D3D11Interop.D3D11_MAP.D3D11_MAP_READ, 0, out var mapped);
+            _d3dContext.Map(stagingTexture, 0, D3D11Interop.D3D11_MAP.D3D11_MAP_READ, 0, out var mapped);
 
             try
             {
@@ -199,7 +199,7 @@ namespace LiveKit
             }
             finally
             {
-                _d3dContext.Unmap((D3D11Interop.ID3D11Resource)stagingTexture, 0);
+                _d3dContext.Unmap(stagingTexture, 0);
                 // Release COM objects
                 Marshal.ReleaseComObject(stagingTexture);
                 Marshal.ReleaseComObject(texture);
