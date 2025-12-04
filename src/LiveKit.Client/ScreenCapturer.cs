@@ -233,33 +233,34 @@ namespace LiveKit
         }
 
         [DllImport("d3d11.dll", EntryPoint = "CreateDirect3D11DeviceFromDXGIDevice", SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-        private static extern IntPtr CreateDirect3D11DeviceFromDXGIDevice(IntPtr dxgiDevice, out IInspectable graphicsDevice);
+        private static extern int CreateDirect3D11DeviceFromDXGIDevice(IntPtr dxgiDevice, out IntPtr graphicsDevice);
 
         private static IDirect3DDevice CreateDirect3DDeviceFromDXGIDevice(IntPtr dxgiDevice)
         {
-            // This is a bit tricky. The standard way is using CreateDirect3D11DeviceFromDXGIDevice
-            // which is exported by d3d11.dll but it returns IInspectable.
-            // We need to cast it to IDirect3DDevice.
+            // Call the native function to create the Direct3D device
+            int hr = CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice, out var inspectablePtr);
             
-            object? device = null;
+            if (hr != 0)
+            {
+                throw new Exception($"CreateDirect3D11DeviceFromDXGIDevice failed with HRESULT: 0x{hr:X8}");
+            }
             
-            // We can use the built-in interop if available, but it's often hidden.
-            // Let's try to find the factory or use the P/Invoke.
+            if (inspectablePtr == IntPtr.Zero)
+            {
+                throw new Exception("CreateDirect3D11DeviceFromDXGIDevice returned null pointer");
+            }
             
-            // Actually, there is a helper: Windows.Graphics.DirectX.Direct3D11.CreateDirect3DDevice
-            // But it's not a static method on the class in older versions?
-            // In .NET 8 / Windows SDK, it might be available.
-            // Let's use the P/Invoke approach to be safe.
-            
-            CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice, out var inspectable);
-            return (IDirect3DDevice)inspectable;
-        }
-        
-        [ComImport]
-        [InterfaceType(ComInterfaceType.InterfaceIsIInspectable)]
-        [Guid("AF86E2E0-B12D-4C6A-9C5A-D7AA65101E90")]
-        private interface IInspectable
-        {
+            try
+            {
+                // Marshal the IInspectable pointer to IDirect3DDevice
+                var device = (IDirect3DDevice)Marshal.GetObjectForIUnknown(inspectablePtr);
+                return device;
+            }
+            finally
+            {
+                // Release the pointer since GetObjectForIUnknown adds a reference
+                Marshal.Release(inspectablePtr);
+            }
         }
 
         private GraphicsCaptureItem CreateItemForMonitor(IntPtr hmon)
