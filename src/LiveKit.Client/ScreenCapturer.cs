@@ -112,7 +112,8 @@ namespace LiveKit
                 Console.WriteLine($"[ProcessFrame] Texture GUID: {textureGuid}");
                 
                 Console.WriteLine("[ProcessFrame] Calling GetInterface...");
-                var texturePtr = access.GetInterface(ref textureGuid);
+                IntPtr texturePtr;
+                access.GetInterface(ref textureGuid, out texturePtr);
                 Console.WriteLine($"[ProcessFrame] GetInterface returned pointer: 0x{texturePtr:X}");
                 
                 if (texturePtr == IntPtr.Zero)
