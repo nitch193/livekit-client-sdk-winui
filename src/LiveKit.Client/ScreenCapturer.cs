@@ -271,9 +271,10 @@ namespace LiveKit
             
             try
             {
-                var iidUnknown = Guid.Parse("00000000-0000-0000-C000-000000000046"); // IUnknown
+                // Query for IGraphicsCaptureItemInterop interface
+                var iGraphicsCaptureItemInteropGuid = Guid.Parse("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356");
                 
-                RoGetActivationFactory(hstringPtr, ref iidUnknown, out var factoryPtr);
+                RoGetActivationFactory(hstringPtr, ref iGraphicsCaptureItemInteropGuid, out var factoryPtr);
                 
                 var interop = (D3D11Interop.IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
                 var iGraphicsCaptureItemIID = Guid.Parse("79C3F95B-31F7-4EC2-A464-632EF5D30760");
