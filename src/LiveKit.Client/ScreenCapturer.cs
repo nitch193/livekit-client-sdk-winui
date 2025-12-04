@@ -274,11 +274,22 @@ namespace LiveKit
                 // Query for IGraphicsCaptureItemInterop interface
                 var iGraphicsCaptureItemInteropGuid = Guid.Parse("A37624AB-8D5F-4650-903E-9EAE3D9BC670");
                 
-                RoGetActivationFactory(hstringPtr, ref iGraphicsCaptureItemInteropGuid, out var factoryPtr);
+                int hr = RoGetActivationFactory(hstringPtr, ref iGraphicsCaptureItemInteropGuid, out var factoryPtr);
+                
+                if (hr != 0 || factoryPtr == IntPtr.Zero)
+                {
+                    throw new Exception($"RoGetActivationFactory failed with HRESULT: 0x{hr:X8}");
+                }
                 
                 var interop = (D3D11Interop.IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
                 var iGraphicsCaptureItemIID = Guid.Parse("79C3F95B-31F7-4EC2-A464-632EF5D30760");
                 var itemPtr = interop.CreateForMonitor(hmon, ref iGraphicsCaptureItemIID);
+                
+                if (itemPtr == IntPtr.Zero)
+                {
+                    Marshal.Release(factoryPtr);
+                    throw new Exception("CreateForMonitor returned null pointer. Monitor handle may be invalid.");
+                }
                 
                 // Use WinRT ComWrappersSupport to create the WinRT object from the COM pointer
                 var captureItem = WinRT.ComWrappersSupport.CreateRcwForComObject<GraphicsCaptureItem>(itemPtr);
