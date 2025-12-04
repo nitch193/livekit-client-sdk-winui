@@ -271,22 +271,33 @@ namespace LiveKit
             
             try
             {
-                // Query for IGraphicsCaptureItemInterop interface
-                var iGraphicsCaptureItemInteropGuid = Guid.Parse("A37624AB-8D5F-4650-903E-9EAE3D9BC670");
+                // Query for IUnknown first (activation factories implement IUnknown)
+                var iidUnknown = Guid.Parse("00000000-0000-0000-C000-000000000046");
                 
-                int hr = RoGetActivationFactory(hstringPtr, ref iGraphicsCaptureItemInteropGuid, out var factoryPtr);
+                int hr = RoGetActivationFactory(hstringPtr, ref iidUnknown, out var factoryPtr);
                 
                 if (hr != 0 || factoryPtr == IntPtr.Zero)
                 {
                     throw new Exception($"RoGetActivationFactory failed with HRESULT: 0x{hr:X8}");
                 }
                 
-                var interop = (D3D11Interop.IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
+                // Now QueryInterface for IGraphicsCaptureItemInterop
+                var iGraphicsCaptureItemInteropGuid = Guid.Parse("A37624AB-8D5F-4650-903E-9EAE3D9BC670");
+                Marshal.QueryInterface(factoryPtr, ref iGraphicsCaptureItemInteropGuid, out var interopPtr);
+                
+                if (interopPtr == IntPtr.Zero)
+                {
+                    Marshal.Release(factoryPtr);
+                    throw new Exception("QueryInterface for IGraphicsCaptureItemInterop failed");
+                }
+                
+                var interop = (D3D11Interop.IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(interopPtr);
                 var iGraphicsCaptureItemIID = Guid.Parse("79C3F95B-31F7-4EC2-A464-632EF5D30760");
                 var itemPtr = interop.CreateForMonitor(hmon, ref iGraphicsCaptureItemIID);
                 
                 if (itemPtr == IntPtr.Zero)
                 {
+                    Marshal.Release(interopPtr);
                     Marshal.Release(factoryPtr);
                     throw new Exception("CreateForMonitor returned null pointer. Monitor handle may be invalid.");
                 }
@@ -295,6 +306,7 @@ namespace LiveKit
                 var captureItem = WinRT.ComWrappersSupport.CreateRcwForComObject<GraphicsCaptureItem>(itemPtr);
                 
                 Marshal.Release(itemPtr);
+                Marshal.Release(interopPtr);
                 Marshal.Release(factoryPtr);
                 
                 return captureItem;
