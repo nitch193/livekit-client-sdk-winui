@@ -6,6 +6,8 @@ using LiveKit.Proto;
 using Windows.Graphics.Capture;
 using Windows.Graphics.DirectX.Direct3D11;
 using Windows.Graphics.DirectX;
+using WinRT;
+using System.Runtime.CompilerServices;
 
 namespace LiveKit
 {
@@ -92,7 +94,7 @@ namespace LiveKit
 
             // Get the surface as ID3D11Texture2D
             using var surface = frame.Surface;
-            var access = (D3D11Interop.IDirect3DDxgiInterfaceAccess)surface;
+            var access = surface.As<D3D11Interop.IDirect3DDxgiInterfaceAccess>();
             var textureGuid = typeof(D3D11Interop.ID3D11Texture2D).GUID;
             var texturePtr = access.GetInterface(ref textureGuid);
             
@@ -222,20 +224,21 @@ namespace LiveKit
             // Query for IDXGIDevice interface from ID3D11Device
             // ID3D11Device inherits from IDXGIDevice, so we can QueryInterface for it
             var idxgiDeviceGuid = new Guid("54ec77fa-1377-44e6-8c32-88fd5f44c84c"); // IDXGIDevice
-            var d3dDevicePtr = Marshal.GetIUnknownForObject(d3dDevice);
-            
-            Marshal.QueryInterface(d3dDevicePtr, ref idxgiDeviceGuid, out var idxgiDevicePtr);
-            Marshal.Release(d3dDevicePtr);
-            
-            if (idxgiDevicePtr == IntPtr.Zero)
-            {
-                throw new Exception("Failed to query IDXGIDevice interface from ID3D11Device");
+            IntPtr pUnknown = Marshal.GetIUnknownForObject(d3dDevice);
+            IntPtr idxgiDevicePtr = IntPtr.Zero;
+            try {
+                int hr = Marshal.QueryInterface(pUnknown, ref idxgiDeviceGuid, out idxgiDevicePtr);
+                if (hr != 0) {
+                    throw new Exception("Failed to query IDXGIDevice interface from ID3D11Device");
+                }
+                var device = CreateDirect3DDeviceFromDXGIDevice(idxgiDevicePtr);
+                return device;
+
+            }finally {
+                if(idxgiDevicePtr != IntPtr.Zero)Marshal.Release(idxgiDevicePtr);
+                if(pUnknown != IntPtr.Zero)Marshal.Release(pUnknown);
+
             }
-            
-            var device = CreateDirect3DDeviceFromDXGIDevice(idxgiDevicePtr);
-            Marshal.Release(idxgiDevicePtr);
-            
-            return device;
         }
 
         [DllImport("d3d11.dll", EntryPoint = "CreateDirect3D11DeviceFromDXGIDevice", SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
@@ -244,92 +247,68 @@ namespace LiveKit
         private static IDirect3DDevice CreateDirect3DDeviceFromDXGIDevice(IntPtr dxgiDevice)
         {
             // Call the native function to create the Direct3D device
-            int hr = CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice, out var inspectablePtr);
+            IntPtr pUnknown = IntPtr.Zero;
+            int hr = CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice, out pUnknown);
             
             if (hr != 0)
             {
                 throw new Exception($"CreateDirect3D11DeviceFromDXGIDevice failed with HRESULT: 0x{hr:X8}");
             }
-            
-            if (inspectablePtr == IntPtr.Zero)
-            {
-                throw new Exception("CreateDirect3D11DeviceFromDXGIDevice returned null pointer");
-            }
-            
             try
             {
                 // Marshal the IInspectable pointer to IDirect3DDevice
-                var device = (IDirect3DDevice)Marshal.GetObjectForIUnknown(inspectablePtr);
+                var device = MarshalInterface<Windows.Graphics.DirectX.Direct3D11.IDirect3DDevice>.FromAbi(pUnknown);
                 return device;
             }
             finally
             {
                 // Release the pointer since GetObjectForIUnknown adds a reference
-                Marshal.Release(inspectablePtr);
+                if(pUnknown != IntPtr.Zero)Marshal.Release(pUnknown);
             }
         }
-
+        [ComImport]
+        [InterfaceType(ComInterfaceType.InterfaceIsIInspectable)]
+        [Guid("AF86E2E0-B12D-4C6A-9C5A-D7AA65101E90")]
+        private interface IInspectable {}
+        [DllImport("api-ms-win-core-winrt-l1-1-0.dll")]
+        private static extern int RoGetActivationFactory(IntPtr activatableClassId, ref Guid iid, out IntPtr factory);
+        [DllImport("api-ms-win-core-winrt-string-l1-1-0.dll", CallingConvention = CallingConvention.StdCall)]
+        private static extern int WindowsCreateString([MarshalAs(UnmanagedType.LPWStr)] string sourceString, uint length, out IntPtr hstring);
+        [DllImport("api-ms-win-core-winrt-l1-1-0.dll", CallingConvention = CallingConvention.StdCall)]
+        private static extern int WindowsDeleteString(IntPtr hstring);
         private GraphicsCaptureItem CreateItemForMonitor(IntPtr hmon)
         {
             // The IGraphicsCaptureItemInterop is obtained directly from the activation factory
             // by querying for it with RoGetActivationFactory using the interop GUID
+            var iidUnknown = Guid.Parse("00000000-0000-0000-C000-000000000046");
+            var iGraphicsCaptureItemIID = Guid.Parse("79C3F95B-31F7-4EC2-A464-632EF5D30760");
+            IntPtr hstring = IntPtr.Zero;
+            IntPtr itemPtr = IntPtr.Zero;
+            IntPtr factoryPtr = IntPtr.Zero;
+            try {
             var activatableId = "Windows.Graphics.Capture.GraphicsCaptureItem";
-            WindowsCreateString(activatableId, (uint)activatableId.Length, out var hstringPtr);
+            int hr = WindowsCreateString(activatableId, (uint)activatableId.Length, out hstring);
+            if (hr != 0) throw new Exception("Failed to create string");
+            hr = RoGetActivationFactory(hstring, ref iidUnknown, out factoryPtr);
+            if (hr != 0) throw new Exception("Failed to get activation factory");
+            var interop = (D3D11Interop.IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
+            itemPtr = interop.CreateForMonitor(hmon, ref iGraphicsCaptureItemIID);
+            var captureItem = MarshalInterface<GraphicsCaptureItem>.FromAbi(itemPtr);
+            return captureItem;
+
+            }finally{
+               if(hstring != IntPtr.Zero) WindowsDeleteString(hstring);
+               if(itemPtr != IntPtr.Zero) Marshal.Release(itemPtr);
+               if(factoryPtr != IntPtr.Zero) Marshal.Release(factoryPtr);
+            }
             
-            try
-            {
-                // Get the interop interface directly from the activation factory
-                // This is the documented way to get IGraphicsCaptureItemInterop
-                var iGraphicsCaptureItemInteropGuid = new Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356");
-                
-                int hr = RoGetActivationFactory(hstringPtr, ref iGraphicsCaptureItemInteropGuid, out var interopPtr);
-                
-                if (hr != 0 || interopPtr == IntPtr.Zero)
-                {
-                    throw new Exception($"Failed to get IGraphicsCaptureItemInterop from activation factory. HRESULT: 0x{hr:X8}");
-                }
-                
-                try
-                {
-                    var interop = (D3D11Interop.IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(interopPtr);
-                    var iGraphicsCaptureItemIID = new Guid("79C3F95B-31F7-4EC2-A464-632EF5D30760");
-                    var itemPtr = interop.CreateForMonitor(hmon, ref iGraphicsCaptureItemIID);
-                    
-                    if (itemPtr == IntPtr.Zero)
-                    {
-                        throw new Exception("CreateForMonitor returned null. Monitor handle may be invalid.");
-                    }
-                    
-                    // Use WinRT ComWrappersSupport to create the WinRT object from the COM pointer
-                    var captureItem = WinRT.ComWrappersSupport.CreateRcwForComObject<GraphicsCaptureItem>(itemPtr);
-                    
-                    Marshal.Release(itemPtr);
-                    
-                    return captureItem;
-                }
-                finally
-                {
-                    Marshal.Release(interopPtr);
-                }
-            }
-            finally
-            {
-                WindowsDeleteString(hstringPtr);
-            }
         }
 
-        [DllImport("api-ms-win-core-winrt-string-l1-1-0.dll", CharSet = CharSet.Unicode)]
-        private static extern int WindowsCreateString(
-            [MarshalAs(UnmanagedType.LPWStr)] string sourceString,
-            uint length,
-            out IntPtr hstring);
-
-        [DllImport("api-ms-win-core-winrt-string-l1-1-0.dll")]
-        private static extern int WindowsDeleteString(IntPtr hstring);
+        
 
         [DllImport("api-ms-win-core-winrt-l1-1-0.dll")]
         private static extern int RoGetActivationFactory(
-            IntPtr activatableClassId,
+            [MarshalAs(UnmanagedType.HString)] string activatableClassId,
             [In] ref Guid iid,
             [Out] out IntPtr factory);
 
