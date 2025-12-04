@@ -23,6 +23,7 @@ namespace LiveKit
         private D3D11Interop.ID3D11Device? _d3dDevice;
         private D3D11Interop.ID3D11DeviceContext? _d3dContext;
         private IDirect3DDevice? _device;
+        private object? _dispatcherQueueController; // Using object to avoid referencing WinRT types directly if not needed, but we need the pointer
         private bool _disposed;
 
         public ScreenCapturer(VideoSource source, uint width = 1920, uint height = 1080)
@@ -42,6 +43,9 @@ namespace LiveKit
 
         private void InitializeCapture()
         {
+            // 0. Ensure DispatcherQueue exists (needed for Console Apps)
+            EnsureDispatcherQueue();
+
             // 1. Initialize D3D11 Device
             _device = CreateD3DDevice(out _d3dDevice, out _d3dContext);
 
@@ -69,6 +73,8 @@ namespace LiveKit
         {
             using var frame = sender.TryGetNextFrame();
             if (frame == null) return;
+
+            // Console.WriteLine($"Frame arrived: {frame.ContentSize.Width}x{frame.ContentSize.Height}");
 
             try
             {
@@ -327,6 +333,86 @@ namespace LiveKit
             [In] ref Guid iid,
             [Out] out IntPtr factory);
 
+        private void EnsureDispatcherQueue()
+        {
+            // Check if we already have a DispatcherQueue
+            if (TryGetDispatcherQueue() != IntPtr.Zero)
+            {
+                return;
+            }
+
+            Console.WriteLine("Creating DispatcherQueueController...");
+
+            var options = new DispatcherQueueOptions
+            {
+                dwSize = Marshal.SizeOf<DispatcherQueueOptions>(),
+                threadType = DispatcherQueueThreadType.DQTYPE_THREAD_CURRENT,
+                apartmentType = DispatcherQueueThreadApartmentType.DQTAT_COM_NONE
+            };
+
+            int hr = CreateDispatcherQueueController(options, out var controllerPtr);
+            
+            if (hr != 0)
+            {
+                throw new Exception($"CreateDispatcherQueueController failed with HRESULT: 0x{hr:X8}");
+            }
+
+            // We hold onto the controller to keep the queue alive
+            // We don't strictly need to cast it to a WinRT object if we just want to keep it alive via the pointer,
+            // but we should probably release it properly.
+            // For now, let's just store the pointer or RCW if we had the definition.
+            // Since we don't have the WinRT projection for DispatcherQueueController handy in this file without extra refs,
+            // we will manage the pointer manually or use a simple wrapper.
+            
+            // Actually, we should probably just keep the pointer and release it in Dispose.
+            _dispatcherQueueController = controllerPtr;
+        }
+
+        [DllImport("CoreMessaging.dll")]
+        private static extern int CreateDispatcherQueueController(
+            [In] DispatcherQueueOptions options,
+            [Out] out IntPtr dispatcherQueueController);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct DispatcherQueueOptions
+        {
+            public int dwSize;
+            public DispatcherQueueThreadType threadType;
+            public DispatcherQueueThreadApartmentType apartmentType;
+        }
+
+        private enum DispatcherQueueThreadType
+        {
+            DQTYPE_THREAD_DEDICATED = 1,
+            DQTYPE_THREAD_CURRENT = 2,
+        }
+
+        private enum DispatcherQueueThreadApartmentType
+        {
+            DQTAT_COM_NONE = 0,
+            DQTAT_COM_ASTA = 1,
+            DQTAT_COM_STA = 2
+        }
+
+        // Helper to check if DispatcherQueue exists
+        // We can use Windows.System.DispatcherQueue.GetForCurrentThread() but that's WinRT.
+        // Let's use PInvoke or just assume if we are in a Console App we might need one.
+        // Actually, we can use the WinRT API if available.
+        private IntPtr TryGetDispatcherQueue()
+        {
+            try
+            {
+                // This might throw if not on a thread with DispatcherQueue or if not initialized
+                // But wait, Windows.System.DispatcherQueue.GetForCurrentThread() returns null if none.
+                var queue = Windows.System.DispatcherQueue.GetForCurrentThread();
+                return queue != null ? (IntPtr)1 : IntPtr.Zero; // Just return non-zero if exists
+            }
+            catch
+            {
+                return IntPtr.Zero;
+            }
+        }
+
         public void Dispose()
         {
             if (_disposed) return;
@@ -345,6 +431,15 @@ namespace LiveKit
             if (_device != null)
             {
                 Marshal.ReleaseComObject(_device);
+            }
+
+            if (_dispatcherQueueController is IntPtr controllerPtr && controllerPtr != IntPtr.Zero)
+            {
+                // If we stored it as IntPtr, release it.
+                // CreateDispatcherQueueController returns a pointer to IDispatcherQueueController.
+                // We should Release it.
+                Marshal.Release(controllerPtr);
+                _dispatcherQueueController = null;
             }
 
             _disposed = true;
