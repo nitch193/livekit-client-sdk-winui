@@ -280,7 +280,7 @@ namespace LiveKit
             {
                 // Get the interop interface directly from the activation factory
                 // This is the documented way to get IGraphicsCaptureItemInterop
-                var iGraphicsCaptureItemInteropGuid = new Guid("A37624AB-8D5F-4650-903E-9EAE3D9BC670");
+                var iGraphicsCaptureItemInteropGuid = new Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356");
                 
                 int hr = RoGetActivationFactory(hstringPtr, ref iGraphicsCaptureItemInteropGuid, out var interopPtr);
                 
