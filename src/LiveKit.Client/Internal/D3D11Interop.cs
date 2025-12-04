@@ -41,6 +41,14 @@ namespace LiveKit.Internal
         }
 
         [ComImport]
+        [Guid("54ec77fa-1377-44e6-8c32-88fd5f44c84c")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IDXGIDevice
+        {
+            // We only need the interface for QueryInterface, no methods required
+        }
+
+        [ComImport]
         [Guid("db6f6ddb-ac77-4e88-8253-819df9bbf140")]
         [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         public interface ID3D11Device

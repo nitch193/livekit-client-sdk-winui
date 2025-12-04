@@ -213,16 +213,18 @@ namespace LiveKit
                 out int featureLevel,
                 out d3dContext);
 
-            // Create DXGI Device from D3D Device
-            var dxgiDevice = (D3D11Interop.IDirect3DDxgiInterfaceAccess)d3dDevice;
-            // We need to get the IDXGIDevice to create Direct3D11Device
-            // Actually, Windows.Graphics.DirectX.Direct3D11.CreateDirect3DDeviceFromDXGIDevice
-            // expects an IDXGIDevice.
+            // Query for IDXGIDevice interface from ID3D11Device
+            // ID3D11Device inherits from IDXGIDevice, so we can QueryInterface for it
+            var idxgiDeviceGuid = new Guid("54ec77fa-1377-44e6-8c32-88fd5f44c84c"); // IDXGIDevice
+            var d3dDevicePtr = Marshal.GetIUnknownForObject(d3dDevice);
             
-            // Let's use the interop to create the WinRT wrapper
-            // We need to get the IDXGIDevice interface pointer
-            var idxgiDeviceGuid = Guid.Parse("54ec77fa-1377-44e6-8c32-88fd5f44c84c"); // IDXGIDevice
-            var idxgiDevicePtr = dxgiDevice.GetInterface(ref idxgiDeviceGuid);
+            Marshal.QueryInterface(d3dDevicePtr, ref idxgiDeviceGuid, out var idxgiDevicePtr);
+            Marshal.Release(d3dDevicePtr);
+            
+            if (idxgiDevicePtr == IntPtr.Zero)
+            {
+                throw new Exception("Failed to query IDXGIDevice interface from ID3D11Device");
+            }
             
             var device = CreateDirect3DDeviceFromDXGIDevice(idxgiDevicePtr);
             Marshal.Release(idxgiDevicePtr);
