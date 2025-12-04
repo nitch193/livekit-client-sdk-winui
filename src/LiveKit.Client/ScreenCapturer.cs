@@ -90,42 +90,74 @@ namespace LiveKit
 
         private unsafe void ProcessFrame(Direct3D11CaptureFrame frame)
         {
-            if (_d3dDevice == null || _d3dContext == null) return;
-
-            // Get the surface as ID3D11Texture2D
-            using var surface = frame.Surface;
-            var access = surface.As<D3D11Interop.IDirect3DDxgiInterfaceAccess>();
-            var textureGuid = typeof(D3D11Interop.ID3D11Texture2D).GUID;
-            var texturePtr = access.GetInterface(ref textureGuid);
-            
-            if (texturePtr == IntPtr.Zero) return;
-
-            var texture = (D3D11Interop.ID3D11Texture2D)Marshal.GetObjectForIUnknown(texturePtr);
-            Marshal.Release(texturePtr); // Release the raw pointer, we have the RCW
-
-            // Create a staging texture to copy data to CPU
-            var desc = new D3D11Interop.D3D11_TEXTURE2D_DESC
+            try
             {
-                Width = (uint)frame.ContentSize.Width,
-                Height = (uint)frame.ContentSize.Height,
-                MipLevels = 1,
-                ArraySize = 1,
-                Format = D3D11Interop.DXGI_FORMAT_B8G8R8A8_UNORM,
-                SampleDesc = new D3D11Interop.DXGI_SAMPLE_DESC { Count = 1, Quality = 0 },
-                Usage = D3D11Interop.D3D11_USAGE.D3D11_USAGE_STAGING,
-                BindFlags = 0,
-                CPUAccessFlags = D3D11Interop.D3D11_CPU_ACCESS_READ,
-                MiscFlags = 0
-            };
+                Console.WriteLine("[ProcessFrame] Starting frame processing...");
+                
+                if (_d3dDevice == null || _d3dContext == null)
+                {
+                    Console.WriteLine("[ProcessFrame] D3D device or context is null, returning");
+                    return;
+                }
 
-            D3D11Interop.ID3D11Texture2D stagingTexture;
-            _d3dDevice.CreateTexture2D(ref desc, IntPtr.Zero, out stagingTexture);
+                // Get the surface as ID3D11Texture2D
+                Console.WriteLine("[ProcessFrame] Getting frame surface...");
+                using var surface = frame.Surface;
+                
+                Console.WriteLine("[ProcessFrame] Casting surface to IDirect3DDxgiInterfaceAccess...");
+                var access = surface.As<D3D11Interop.IDirect3DDxgiInterfaceAccess>();
+                
+                Console.WriteLine("[ProcessFrame] Getting ID3D11Texture2D GUID...");
+                var textureGuid = typeof(D3D11Interop.ID3D11Texture2D).GUID;
+                Console.WriteLine($"[ProcessFrame] Texture GUID: {textureGuid}");
+                
+                Console.WriteLine("[ProcessFrame] Calling GetInterface...");
+                var texturePtr = access.GetInterface(ref textureGuid);
+                Console.WriteLine($"[ProcessFrame] GetInterface returned pointer: 0x{texturePtr:X}");
+                
+                if (texturePtr == IntPtr.Zero)
+                {
+                    Console.WriteLine("[ProcessFrame] Texture pointer is null, returning");
+                    return;
+                }
 
-            // Copy to staging
-            _d3dContext.CopyResource(stagingTexture, texture);
+                Console.WriteLine("[ProcessFrame] Converting pointer to ID3D11Texture2D RCW...");
+                var texture = (D3D11Interop.ID3D11Texture2D)Marshal.GetObjectForIUnknown(texturePtr);
+                Console.WriteLine("[ProcessFrame] Successfully created texture RCW");
+                
+                Marshal.Release(texturePtr); // Release the raw pointer, we have the RCW
+                Console.WriteLine("[ProcessFrame] Released raw texture pointer");
 
-            // Map the staging texture
-            _d3dContext.Map(stagingTexture, 0, D3D11Interop.D3D11_MAP.D3D11_MAP_READ, 0, out var mapped);
+                // Create a staging texture to copy data to CPU
+                Console.WriteLine($"[ProcessFrame] Creating staging texture ({frame.ContentSize.Width}x{frame.ContentSize.Height})...");
+                var desc = new D3D11Interop.D3D11_TEXTURE2D_DESC
+                {
+                    Width = (uint)frame.ContentSize.Width,
+                    Height = (uint)frame.ContentSize.Height,
+                    MipLevels = 1,
+                    ArraySize = 1,
+                    Format = D3D11Interop.DXGI_FORMAT_B8G8R8A8_UNORM,
+                    SampleDesc = new D3D11Interop.DXGI_SAMPLE_DESC { Count = 1, Quality = 0 },
+                    Usage = D3D11Interop.D3D11_USAGE.D3D11_USAGE_STAGING,
+                    BindFlags = 0,
+                    CPUAccessFlags = D3D11Interop.D3D11_CPU_ACCESS_READ,
+                    MiscFlags = 0
+                };
+
+                D3D11Interop.ID3D11Texture2D stagingTexture;
+                Console.WriteLine("[ProcessFrame] Calling CreateTexture2D...");
+                _d3dDevice.CreateTexture2D(ref desc, IntPtr.Zero, out stagingTexture);
+                Console.WriteLine("[ProcessFrame] Staging texture created successfully");
+
+                // Copy to staging
+                Console.WriteLine("[ProcessFrame] Copying texture to staging...");
+                _d3dContext.CopyResource(stagingTexture, texture);
+                Console.WriteLine("[ProcessFrame] Copy complete");
+
+                // Map the staging texture
+                Console.WriteLine("[ProcessFrame] Mapping staging texture...");
+                _d3dContext.Map(stagingTexture, 0, D3D11Interop.D3D11_MAP.D3D11_MAP_READ, 0, out var mapped);
+                Console.WriteLine($"[ProcessFrame] Mapped successfully - RowPitch: {mapped.RowPitch}, pData: 0x{mapped.pData:X}");
 
             try
             {
@@ -169,7 +201,9 @@ namespace LiveKit
                 
                 // Let's copy to a pinned buffer.
                 
+                Console.WriteLine($"[ProcessFrame] Allocating frame data buffer ({desc.Width * desc.Height * 4} bytes)...");
                 byte[] frameData = new byte[desc.Width * desc.Height * 4];
+                Console.WriteLine("[ProcessFrame] Copying frame data row by row...");
                 fixed (byte* destPtr = frameData)
                 {
                     byte* srcPtr = (byte*)mapped.pData;
@@ -179,10 +213,13 @@ namespace LiveKit
                         srcPtr += mapped.RowPitch;
                     }
                 }
+                Console.WriteLine("[ProcessFrame] Frame data copied successfully");
                 
+                Console.WriteLine("[ProcessFrame] Pinning frame data...");
                 var handle = GCHandle.Alloc(frameData, GCHandleType.Pinned);
                 var ptr = handle.AddrOfPinnedObject();
 
+                Console.WriteLine("[ProcessFrame] Creating VideoBufferInfo...");
                 var bufferInfo = new VideoBufferInfo
                 {
                     Type = VideoBufferType.Rgba,
@@ -193,16 +230,29 @@ namespace LiveKit
                 };
 
                 var timestampUs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000;
+                Console.WriteLine($"[ProcessFrame] Capturing frame to VideoSource (timestamp: {timestampUs})...");
                 _source.CaptureFrame(bufferInfo, timestampUs);
+                Console.WriteLine("[ProcessFrame] Frame captured successfully");
                 
                 handle.Free();
+                Console.WriteLine("[ProcessFrame] Frame data unpinned");
             }
-            finally
+                finally
+                {
+                    Console.WriteLine("[ProcessFrame] Unmapping staging texture...");
+                    _d3dContext.Unmap(stagingTexture, 0);
+                    Console.WriteLine("[ProcessFrame] Releasing COM objects...");
+                    // Release COM objects
+                    Marshal.ReleaseComObject(stagingTexture);
+                    Marshal.ReleaseComObject(texture);
+                    Console.WriteLine("[ProcessFrame] COM objects released");
+                }
+            }
+            catch (Exception ex)
             {
-                _d3dContext.Unmap(stagingTexture, 0);
-                // Release COM objects
-                Marshal.ReleaseComObject(stagingTexture);
-                Marshal.ReleaseComObject(texture);
+                Console.WriteLine($"[ProcessFrame] EXCEPTION: {ex.GetType().Name}: {ex.Message}");
+                Console.WriteLine($"[ProcessFrame] Stack trace: {ex.StackTrace}");
+                throw;
             }
         }
 
