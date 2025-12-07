@@ -37,7 +37,7 @@ namespace LiveKit.Internal
         [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         public interface IDirect3DDxgiInterfaceAccess
         {
-            IntPtr GetInterface([In] ref Guid iid);
+            void GetInterface([In] ref Guid iid, [Out] out IntPtr ppv);
         }
 
 

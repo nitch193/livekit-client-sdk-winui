@@ -6,6 +6,7 @@ using LiveKit.Proto;
 using Windows.Graphics.Capture;
 using Windows.Graphics.DirectX.Direct3D11;
 using Windows.Graphics.DirectX;
+using Windows.Graphics.Imaging;
 using WinRT;
 using System.Runtime.CompilerServices;
 
@@ -23,10 +24,17 @@ namespace LiveKit
         private Direct3D11CaptureFramePool? _framePool;
         private GraphicsCaptureSession? _session;
         private D3D11Interop.ID3D11Device? _d3dDevice;
-        private D3D11Interop.ID3D11DeviceContext? _d3dContext;
         private IDirect3DDevice? _device;
-        private object? _dispatcherQueueController; // Using object to avoid referencing WinRT types directly if not needed, but we need the pointer
+        private object? _dispatcherQueueController;
         private bool _disposed;
+
+        [ComImport]
+        [Guid("5B0D3235-4DBA-4D44-865E-8F1D0E4FD04D")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        unsafe interface IMemoryBufferByteAccess
+        {
+            void GetBuffer(out byte* buffer, out uint capacity);
+        }
 
         public ScreenCapturer(VideoSource source, uint width = 1920, uint height = 1080)
         {
@@ -45,11 +53,11 @@ namespace LiveKit
 
         private void InitializeCapture()
         {
-            // 0. Ensure DispatcherQueue exists (needed for Console Apps)
+            // 0. Ensure DispatcherQueue exists
             EnsureDispatcherQueue();
 
             // 1. Initialize D3D11 Device
-            _device = CreateD3DDevice(out _d3dDevice, out _d3dContext);
+            _device = CreateD3DDevice(out _d3dDevice);
 
             // 2. Create Capture Item (Primary Monitor)
             var monitor = D3D11Interop.MonitorFromWindow(IntPtr.Zero, D3D11Interop.MONITOR_DEFAULTTOPRIMARY);
@@ -76,11 +84,11 @@ namespace LiveKit
             using var frame = sender.TryGetNextFrame();
             if (frame == null) return;
 
-            // Console.WriteLine($"Frame arrived: {frame.ContentSize.Width}x{frame.ContentSize.Height}");
-
             try
             {
-                ProcessFrame(frame);
+                // We need to run async code here, but FrameArrived is void-returning.
+                // We'll fire and forget, but handle exceptions.
+                _ = ProcessFrameAsync(frame);
             }
             catch (Exception ex)
             {
@@ -88,176 +96,53 @@ namespace LiveKit
             }
         }
 
-        private unsafe void ProcessFrame(Direct3D11CaptureFrame frame)
+        private async Task ProcessFrameAsync(Direct3D11CaptureFrame frame)
         {
             try
             {
-                Console.WriteLine("[ProcessFrame] Starting frame processing...");
+                // Convert the surface to a SoftwareBitmap
+                var bitmap = await SoftwareBitmap.CreateCopyFromSurfaceAsync(frame.Surface);
                 
-                if (_d3dDevice == null || _d3dContext == null)
+                using (var buffer = bitmap.LockBuffer(BitmapBufferAccessMode.Read))
+                using (var reference = buffer.CreateReference())
                 {
-                    Console.WriteLine("[ProcessFrame] D3D device or context is null, returning");
-                    return;
-                }
-
-                // Get the surface as ID3D11Texture2D
-                Console.WriteLine("[ProcessFrame] Getting frame surface...");
-                using var surface = frame.Surface;
-                
-                Console.WriteLine("[ProcessFrame] Casting surface to IDirect3DDxgiInterfaceAccess...");
-                var access = surface.As<D3D11Interop.IDirect3DDxgiInterfaceAccess>();
-                
-                Console.WriteLine("[ProcessFrame] Getting ID3D11Texture2D GUID...");
-                var textureGuid = typeof(D3D11Interop.ID3D11Texture2D).GUID;
-                Console.WriteLine($"[ProcessFrame] Texture GUID: {textureGuid}");
-                
-                Console.WriteLine("[ProcessFrame] Calling GetInterface...");
-                IntPtr texturePtr;
-                access.GetInterface(ref textureGuid, out texturePtr);
-                Console.WriteLine($"[ProcessFrame] GetInterface returned pointer: 0x{texturePtr:X}");
-                
-                if (texturePtr == IntPtr.Zero)
-                {
-                    Console.WriteLine("[ProcessFrame] Texture pointer is null, returning");
-                    return;
-                }
-
-                Console.WriteLine("[ProcessFrame] Converting pointer to ID3D11Texture2D RCW...");
-                var texture = (D3D11Interop.ID3D11Texture2D)Marshal.GetObjectForIUnknown(texturePtr);
-                Console.WriteLine("[ProcessFrame] Successfully created texture RCW");
-                
-                Marshal.Release(texturePtr); // Release the raw pointer, we have the RCW
-                Console.WriteLine("[ProcessFrame] Released raw texture pointer");
-
-                // Create a staging texture to copy data to CPU
-                Console.WriteLine($"[ProcessFrame] Creating staging texture ({frame.ContentSize.Width}x{frame.ContentSize.Height})...");
-                var desc = new D3D11Interop.D3D11_TEXTURE2D_DESC
-                {
-                    Width = (uint)frame.ContentSize.Width,
-                    Height = (uint)frame.ContentSize.Height,
-                    MipLevels = 1,
-                    ArraySize = 1,
-                    Format = D3D11Interop.DXGI_FORMAT_B8G8R8A8_UNORM,
-                    SampleDesc = new D3D11Interop.DXGI_SAMPLE_DESC { Count = 1, Quality = 0 },
-                    Usage = D3D11Interop.D3D11_USAGE.D3D11_USAGE_STAGING,
-                    BindFlags = 0,
-                    CPUAccessFlags = D3D11Interop.D3D11_CPU_ACCESS_READ,
-                    MiscFlags = 0
-                };
-
-                D3D11Interop.ID3D11Texture2D stagingTexture;
-                Console.WriteLine("[ProcessFrame] Calling CreateTexture2D...");
-                _d3dDevice.CreateTexture2D(ref desc, IntPtr.Zero, out stagingTexture);
-                Console.WriteLine("[ProcessFrame] Staging texture created successfully");
-
-                // Copy to staging
-                Console.WriteLine("[ProcessFrame] Copying texture to staging...");
-                _d3dContext.CopyResource(stagingTexture, texture);
-                Console.WriteLine("[ProcessFrame] Copy complete");
-
-                // Map the staging texture
-                Console.WriteLine("[ProcessFrame] Mapping staging texture...");
-                _d3dContext.Map(stagingTexture, 0, D3D11Interop.D3D11_MAP.D3D11_MAP_READ, 0, out var mapped);
-                Console.WriteLine($"[ProcessFrame] Mapped successfully - RowPitch: {mapped.RowPitch}, pData: 0x{mapped.pData:X}");
-
-            try
-            {
-                // Create VideoBufferInfo
-                // Note: We need to copy the data because we unmap immediately.
-                // For performance, we should reuse a buffer, but for now we allocate.
-                // Actually, VideoSource expects us to pass a pointer. If we pass 'mapped.pData', it's only valid until Unmap.
-                // LiveKit's VideoSource.CaptureFrame sends a request. If it's async/queued, we might need to copy.
-                // Assuming CaptureFrame copies or processes immediately (it sends FFI request, which likely copies).
-                // Wait, FFI usually copies. Let's verify VideoSource.CaptureFrame.
-                // It sends a request with DataPtr. The Rust side likely copies it.
-                // However, if the Rust side is async, we are in trouble.
-                // Safe approach: Copy to a managed array, pin it, send it.
-                
-                int size = (int)(desc.Height * mapped.RowPitch);
-                // We can't easily copy to managed array and pin without allocating every frame.
-                // Let's assume for now we can pass the mapped pointer directly if we wait for the call to return.
-                // The FfiClient.SendRequest is synchronous in sending the message?
-                // It uses a channel. It might be async.
-                // To be safe, let's alloc a buffer.
-                
-                byte[] buffer = new byte[size];
-                // Copy from pData to buffer
-                // We need to handle RowPitch (stride) vs Width * 4
-                // If RowPitch == Width * 4, we can copy block.
-                // If not, we copy row by row.
-                
-                // Simple copy for now (assuming packed or handling stride in VideoBufferInfo)
-                // VideoBufferInfo has Stride. So we can pass the Stride from mapped.RowPitch.
-                
-                // Let's try passing the mapped pointer directly. If it crashes or corrupts, we know why.
-                // But wait, Unmap happens right after. If FFI is async, this is bad.
-                // Let's copy to a managed buffer to be safe.
-                
-                // Optimization: Reuse buffer
-                // For this implementation, we'll just allocate (GC will handle it, but it's churn).
-                
-                // Actually, let's just copy row-by-row to a packed buffer to match expected width/height
-                // because VideoBufferInfo expects a specific stride usually? 
-                // VideoBufferInfo has a Stride field.
-                
-                // Let's copy to a pinned buffer.
-                
-                Console.WriteLine($"[ProcessFrame] Allocating frame data buffer ({desc.Width * desc.Height * 4} bytes)...");
-                byte[] frameData = new byte[desc.Width * desc.Height * 4];
-                Console.WriteLine("[ProcessFrame] Copying frame data row by row...");
-                fixed (byte* destPtr = frameData)
-                {
-                    byte* srcPtr = (byte*)mapped.pData;
-                    for (int y = 0; y < desc.Height; y++)
+                    unsafe
                     {
-                        Buffer.MemoryCopy(srcPtr, destPtr + y * desc.Width * 4, desc.Width * 4, desc.Width * 4);
-                        srcPtr += mapped.RowPitch;
+                        var byteAccess = reference.As<IMemoryBufferByteAccess>();
+                        byteAccess.GetBuffer(out byte* dataPtr, out uint capacity);
+
+                        var plane = buffer.GetPlaneDescription(0);
+                        int stride = plane.Stride;
+                        int width = bitmap.PixelWidth;
+                        int height = bitmap.PixelHeight;
+
+                        // Direct pointer access optimization
+                        // We assume VideoSource.CaptureFrame (and FFI) consumes data synchronously or copies it.
+                        // Based on FfiClient.SendRequest, it seems to serialize/copy before returning.
+                        
+                        var bufferInfo = new VideoBufferInfo
+                        {
+                            Type = VideoBufferType.Rgba,
+                            Width = (uint)width,
+                            Height = (uint)height,
+                            DataPtr = (ulong)dataPtr,
+                            Stride = (uint)stride
+                        };
+
+                        var timestampUs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000;
+                        _source.CaptureFrame(bufferInfo, timestampUs);
                     }
                 }
-                Console.WriteLine("[ProcessFrame] Frame data copied successfully");
                 
-                Console.WriteLine("[ProcessFrame] Pinning frame data...");
-                var handle = GCHandle.Alloc(frameData, GCHandleType.Pinned);
-                var ptr = handle.AddrOfPinnedObject();
-
-                Console.WriteLine("[ProcessFrame] Creating VideoBufferInfo...");
-                var bufferInfo = new VideoBufferInfo
-                {
-                    Type = VideoBufferType.Rgba,
-                    Width = desc.Width,
-                    Height = desc.Height,
-                    DataPtr = (ulong)ptr.ToInt64(),
-                    Stride = desc.Width * 4
-                };
-
-                var timestampUs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000;
-                Console.WriteLine($"[ProcessFrame] Capturing frame to VideoSource (timestamp: {timestampUs})...");
-                _source.CaptureFrame(bufferInfo, timestampUs);
-                Console.WriteLine("[ProcessFrame] Frame captured successfully");
-                
-                handle.Free();
-                Console.WriteLine("[ProcessFrame] Frame data unpinned");
-            }
-                finally
-                {
-                    Console.WriteLine("[ProcessFrame] Unmapping staging texture...");
-                    _d3dContext.Unmap(stagingTexture, 0);
-                    Console.WriteLine("[ProcessFrame] Releasing COM objects...");
-                    // Release COM objects
-                    Marshal.ReleaseComObject(stagingTexture);
-                    Marshal.ReleaseComObject(texture);
-                    Console.WriteLine("[ProcessFrame] COM objects released");
-                }
+                bitmap.Dispose();
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ProcessFrame] EXCEPTION: {ex.GetType().Name}: {ex.Message}");
-                Console.WriteLine($"[ProcessFrame] Stack trace: {ex.StackTrace}");
-                throw;
+                // Console.WriteLine($"[ProcessFrame] EXCEPTION: {ex.GetType().Name}: {ex.Message}");
             }
         }
 
-        private IDirect3DDevice CreateD3DDevice(out D3D11Interop.ID3D11Device d3dDevice, out D3D11Interop.ID3D11DeviceContext d3dContext)
+        private IDirect3DDevice CreateD3DDevice(out D3D11Interop.ID3D11Device d3dDevice)
         {
             // Create D3D11 Device
             D3D11Interop.D3D11CreateDevice(
@@ -270,10 +155,12 @@ namespace LiveKit
                 D3D11Interop.D3D11_SDK_VERSION,
                 out d3dDevice,
                 out int featureLevel,
-                out d3dContext);
+                out var d3dContext); // We don't need context anymore for manual copy
+
+            // Release context immediately as we don't use it
+            if (d3dContext != null) Marshal.ReleaseComObject(d3dContext);
 
             // Query for IDXGIDevice interface from ID3D11Device
-            // ID3D11Device inherits from IDXGIDevice, so we can QueryInterface for it
             var idxgiDeviceGuid = new Guid("54ec77fa-1377-44e6-8c32-88fd5f44c84c"); // IDXGIDevice
             IntPtr pUnknown = Marshal.GetIUnknownForObject(d3dDevice);
             IntPtr idxgiDevicePtr = IntPtr.Zero;
@@ -288,7 +175,6 @@ namespace LiveKit
             }finally {
                 if(idxgiDevicePtr != IntPtr.Zero)Marshal.Release(idxgiDevicePtr);
                 if(pUnknown != IntPtr.Zero)Marshal.Release(pUnknown);
-
             }
         }
 
@@ -297,7 +183,6 @@ namespace LiveKit
 
         private static IDirect3DDevice CreateDirect3DDeviceFromDXGIDevice(IntPtr dxgiDevice)
         {
-            // Call the native function to create the Direct3D device
             IntPtr pUnknown = IntPtr.Zero;
             int hr = CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice, out pUnknown);
             
@@ -307,65 +192,54 @@ namespace LiveKit
             }
             try
             {
-                // Marshal the IInspectable pointer to IDirect3DDevice
                 var device = MarshalInterface<Windows.Graphics.DirectX.Direct3D11.IDirect3DDevice>.FromAbi(pUnknown);
                 return device;
             }
             finally
             {
-                // Release the pointer since GetObjectForIUnknown adds a reference
                 if(pUnknown != IntPtr.Zero)Marshal.Release(pUnknown);
             }
         }
-        [ComImport]
-        [InterfaceType(ComInterfaceType.InterfaceIsIInspectable)]
-        [Guid("AF86E2E0-B12D-4C6A-9C5A-D7AA65101E90")]
-        private interface IInspectable {}
+
         [DllImport("api-ms-win-core-winrt-l1-1-0.dll")]
-        private static extern int RoGetActivationFactory(IntPtr activatableClassId, ref Guid iid, out IntPtr factory);
+        private static extern int RoGetActivationFactory(
+            IntPtr activatableClassId,
+            [In] ref Guid iid,
+            [Out] out IntPtr factory);
+
         [DllImport("api-ms-win-core-winrt-string-l1-1-0.dll", CallingConvention = CallingConvention.StdCall)]
         private static extern int WindowsCreateString([MarshalAs(UnmanagedType.LPWStr)] string sourceString, uint length, out IntPtr hstring);
-        [DllImport("api-ms-win-core-winrt-l1-1-0.dll", CallingConvention = CallingConvention.StdCall)]
+        
+        [DllImport("api-ms-win-core-winrt-string-l1-1-0.dll", CallingConvention = CallingConvention.StdCall)]
         private static extern int WindowsDeleteString(IntPtr hstring);
+
         private GraphicsCaptureItem CreateItemForMonitor(IntPtr hmon)
         {
-            // The IGraphicsCaptureItemInterop is obtained directly from the activation factory
-            // by querying for it with RoGetActivationFactory using the interop GUID
             var iidUnknown = Guid.Parse("00000000-0000-0000-C000-000000000046");
             var iGraphicsCaptureItemIID = Guid.Parse("79C3F95B-31F7-4EC2-A464-632EF5D30760");
             IntPtr hstring = IntPtr.Zero;
             IntPtr itemPtr = IntPtr.Zero;
             IntPtr factoryPtr = IntPtr.Zero;
             try {
-            var activatableId = "Windows.Graphics.Capture.GraphicsCaptureItem";
-            int hr = WindowsCreateString(activatableId, (uint)activatableId.Length, out hstring);
-            if (hr != 0) throw new Exception("Failed to create string");
-            hr = RoGetActivationFactory(hstring, ref iidUnknown, out factoryPtr);
-            if (hr != 0) throw new Exception("Failed to get activation factory");
-            var interop = (D3D11Interop.IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
-            itemPtr = interop.CreateForMonitor(hmon, ref iGraphicsCaptureItemIID);
-            var captureItem = MarshalInterface<GraphicsCaptureItem>.FromAbi(itemPtr);
-            return captureItem;
+                var activatableId = "Windows.Graphics.Capture.GraphicsCaptureItem";
+                int hr = WindowsCreateString(activatableId, (uint)activatableId.Length, out hstring);
+                if (hr != 0) throw new Exception("Failed to create string");
+                hr = RoGetActivationFactory(hstring, ref iidUnknown, out factoryPtr);
+                if (hr != 0) throw new Exception("Failed to get activation factory");
+                var interop = (D3D11Interop.IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
+                itemPtr = interop.CreateForMonitor(hmon, ref iGraphicsCaptureItemIID);
+                var captureItem = MarshalInterface<GraphicsCaptureItem>.FromAbi(itemPtr);
+                return captureItem;
 
             }finally{
-               if(hstring != IntPtr.Zero) WindowsDeleteString(hstring);
-               if(itemPtr != IntPtr.Zero) Marshal.Release(itemPtr);
-               if(factoryPtr != IntPtr.Zero) Marshal.Release(factoryPtr);
+                if(hstring != IntPtr.Zero) WindowsDeleteString(hstring);
+                if(itemPtr != IntPtr.Zero) Marshal.Release(itemPtr);
+                if(factoryPtr != IntPtr.Zero) Marshal.Release(factoryPtr);
             }
-            
         }
-
-        
-
-        [DllImport("api-ms-win-core-winrt-l1-1-0.dll")]
-        private static extern int RoGetActivationFactory(
-            [MarshalAs(UnmanagedType.HString)] string activatableClassId,
-            [In] ref Guid iid,
-            [Out] out IntPtr factory);
 
         private void EnsureDispatcherQueue()
         {
-            // Check if we already have a DispatcherQueue
             if (TryGetDispatcherQueue() != IntPtr.Zero)
             {
                 return;
@@ -387,14 +261,6 @@ namespace LiveKit
                 throw new Exception($"CreateDispatcherQueueController failed with HRESULT: 0x{hr:X8}");
             }
 
-            // We hold onto the controller to keep the queue alive
-            // We don't strictly need to cast it to a WinRT object if we just want to keep it alive via the pointer,
-            // but we should probably release it properly.
-            // For now, let's just store the pointer or RCW if we had the definition.
-            // Since we don't have the WinRT projection for DispatcherQueueController handy in this file without extra refs,
-            // we will manage the pointer manually or use a simple wrapper.
-            
-            // Actually, we should probably just keep the pointer and release it in Dispose.
             _dispatcherQueueController = controllerPtr;
         }
 
@@ -424,18 +290,12 @@ namespace LiveKit
             DQTAT_COM_STA = 2
         }
 
-        // Helper to check if DispatcherQueue exists
-        // We can use Windows.System.DispatcherQueue.GetForCurrentThread() but that's WinRT.
-        // Let's use PInvoke or just assume if we are in a Console App we might need one.
-        // Actually, we can use the WinRT API if available.
         private IntPtr TryGetDispatcherQueue()
         {
             try
             {
-                // This might throw if not on a thread with DispatcherQueue or if not initialized
-                // But wait, Windows.System.DispatcherQueue.GetForCurrentThread() returns null if none.
                 var queue = Windows.System.DispatcherQueue.GetForCurrentThread();
-                return queue != null ? (IntPtr)1 : IntPtr.Zero; // Just return non-zero if exists
+                return queue != null ? (IntPtr)1 : IntPtr.Zero;
             }
             catch
             {
@@ -454,10 +314,6 @@ namespace LiveKit
             {
                 Marshal.ReleaseComObject(_d3dDevice);
             }
-            if (_d3dContext != null)
-            {
-                Marshal.ReleaseComObject(_d3dContext);
-            }
             if (_device != null)
             {
                 Marshal.ReleaseComObject(_device);
@@ -465,9 +321,6 @@ namespace LiveKit
 
             if (_dispatcherQueueController is IntPtr controllerPtr && controllerPtr != IntPtr.Zero)
             {
-                // If we stored it as IntPtr, release it.
-                // CreateDispatcherQueueController returns a pointer to IDispatcherQueueController.
-                // We should Release it.
                 Marshal.Release(controllerPtr);
                 _dispatcherQueueController = null;
             }
