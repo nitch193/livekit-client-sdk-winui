@@ -5,11 +5,13 @@ namespace LiveKit
     /// </summary>
     public class TrackPublication
     {
-        internal TrackPublication(ulong asyncId)
+        internal TrackPublication(ulong asyncId, LiveKit.Proto.TrackPublicationInfo info)
         {
             AsyncId = asyncId;
+            Info = info;
         }
 
         public ulong AsyncId { get; }
+        public LiveKit.Proto.TrackPublicationInfo Info { get; }
     }
 }

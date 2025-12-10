@@ -19,6 +19,9 @@ namespace LiveKit
         private TaskCompletionSource<bool>? _setNameTcs;
         private TaskCompletionSource<bool>? _setAttributesTcs;
 
+        public event Action<RoomEvent>? RoomEventReceived;
+        public event Action<VideoStreamEvent>? VideoStreamEventReceived;
+
         public Room()
         {
             _client = FfiClient.Instance;
@@ -35,6 +38,7 @@ namespace LiveKit
             _client.GetSessionStatsReceived += OnGetSessionStatsReceived;
             _client.PerformRpcReceived += OnPerformRpcReceived;
             _client.RpcMethodInvocationReceived += OnRpcMethodInvocationReceived;
+            _client.VideoStreamEventReceived += OnVideoStreamEventReceived;
         }
 
         public Task ConnectAsync(string url, string token)
@@ -109,6 +113,28 @@ namespace LiveKit
             return _publishTrackTcs.Task;
         }
 
+        public Task<OwnedVideoStream> GetVideoStreamAsync(ulong trackHandle, VideoStreamType type = VideoStreamType.VideoStreamNative)
+        {
+            var request = new FfiRequest
+            {
+                NewVideoStream = new NewVideoStreamRequest
+                {
+                    TrackHandle = trackHandle,
+                    Type = type,
+                    Format = VideoBufferType.Rgba
+                }
+            };
+
+            var response = _client.SendRequest(request);
+
+            if (response.NewVideoStream == null || response.NewVideoStream.Stream == null)
+            {
+                throw new Exception("Failed to create video stream");
+            }
+
+            return Task.FromResult(response.NewVideoStream.Stream);
+        }
+
         private void OnConnectReceived(ConnectCallback e)
         {
             if (!string.IsNullOrEmpty(e.Error))
@@ -133,11 +159,18 @@ namespace LiveKit
 
         private void OnRoomEventReceived(RoomEvent e)
         {
-            Console.WriteLine($"Room Event: {e.MessageCase}");
+            // Console.WriteLine($"Room Event: {e.MessageCase}");
+            RoomEventReceived?.Invoke(e);
+            
             if (e.ParticipantConnected != null)
             {
                 Console.WriteLine($"Participant Connected: {e.ParticipantConnected.Info.Info.Identity}");
             }
+        }
+
+        private void OnVideoStreamEventReceived(VideoStreamEvent e)
+        {
+            VideoStreamEventReceived?.Invoke(e);
         }
 
         private void OnPublishTrackReceived(PublishTrackCallback e)
@@ -148,7 +181,7 @@ namespace LiveKit
             }
             else
             {
-                var publication = new TrackPublication(e.AsyncId);
+                var publication = new TrackPublication(e.AsyncId, e.Publication.Info);
                 _publishTrackTcs?.TrySetResult(publication);
                 Console.WriteLine($"Track published successfully");
             }
