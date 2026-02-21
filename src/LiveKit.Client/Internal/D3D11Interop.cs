@@ -144,7 +144,13 @@ namespace LiveKit.Internal
             void CopyResource(
                 [In] ID3D11Resource pDstResource,
                 [In] ID3D11Resource pSrcResource);
-            void UpdateSubresource(); // Placeholder
+            void UpdateSubresource(
+                [In] ID3D11Resource pDstResource,
+                [In] uint DstSubresource,
+                [In] IntPtr pDstBox,
+                [In] IntPtr pSrcData,
+                [In] uint SrcRowPitch,
+                [In] uint SrcDepthPitch);
             void CopyStructureCount(); // Placeholder
             void ClearRenderTargetView(); // Placeholder
             void ClearUnorderedAccessViewUint(); // Placeholder
@@ -306,9 +312,186 @@ namespace LiveKit.Internal
             [Out] out ID3D11DeviceContext ppImmediateContext);
 
         public const int D3D_DRIVER_TYPE_HARDWARE = 1;
+        public const int D3D_DRIVER_TYPE_WARP = 2;
         public const uint D3D11_CREATE_DEVICE_BGRA_SUPPORT = 0x20;
         public const int D3D11_SDK_VERSION = 7;
         public const int DXGI_FORMAT_B8G8R8A8_UNORM = 87;
         public const uint D3D11_CPU_ACCESS_READ = 0x20000;
+
+        // --- New Completions for SwapChain Support ---
+
+        [ComImport]
+        [Guid("50c83a1c-e072-4c48-87b0-3630fa36a6d0")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IDXGIFactory2 : IDXGIFactory1
+        {
+            // IDXGIFactory methods
+            new void EnumAdapters(); // Placeholder
+            new void MakeWindowAssociation(); // Placeholder
+            new void GetWindowAssociation(); // Placeholder
+            new void CreateSwapChain(); // Placeholder
+            new void CreateSoftwareAdapter(); // Placeholder
+            // IDXGIFactory1 methods
+            new void EnumAdapters1(); // Placeholder
+            new void IsCurrent(); // Placeholder
+
+            // IDXGIFactory2 methods
+            bool IsWindowedStereoEnabled();
+            void CreateSwapChainForHwnd(); // Placeholder
+            void CreateSwapChainForCoreWindow(); // Placeholder
+            void CreateSwapChainForComposition(
+                [In] IntPtr pDevice,
+                [In] ref DXGI_SWAP_CHAIN_DESC1 pDesc,
+                [In] IntPtr pRestrictToOutput,
+                [Out] out IDXGISwapChain1 ppSwapChain);
+        }
+
+        [ComImport]
+        [Guid("770aae78-f26f-4dba-a829-253c83d1b387")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IDXGIFactory1
+        {
+             // IDXGIFactory methods
+            void EnumAdapters(); // Placeholder
+            void MakeWindowAssociation(); // Placeholder
+            void GetWindowAssociation(); // Placeholder
+            void CreateSwapChain(); // Placeholder
+            void CreateSoftwareAdapter(); // Placeholder
+
+            // IDXGIFactory1 methods
+            void EnumAdapters1(); // Placeholder
+            void IsCurrent(); // Placeholder
+        }
+
+        [ComImport]
+        [Guid("790a45f7-0d42-4876-983a-0a55cfe6f4aa")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IDXGISwapChain1
+        {
+             // IDXGISwapChain methods
+            void Present(uint SyncInterval, uint Flags);
+            void GetBuffer(uint Buffer, ref Guid riid, [Out] out IntPtr ppSurface);
+            void SetFullscreenState();
+            void GetFullscreenState();
+            void GetDesc();
+            void ResizeBuffers(uint BufferCount, uint Width, uint Height, int NewFormat, uint SwapChainFlags);
+            void ResizeTarget();
+            void GetContainingOutput();
+            void GetFrameStatistics();
+            void GetLastPresentCount();
+
+            // IDXGISwapChain1 methods
+            void GetDesc1([Out] out DXGI_SWAP_CHAIN_DESC1 pDesc);
+            void GetFullscreenDesc();
+            void GetHwnd();
+            void GetCoreWindow();
+            void Present1();
+            bool IsTemporaryMonoSupported();
+            void GetRestrictToOutput();
+            void SetBackgroundColor();
+            void GetBackgroundColor();
+            void SetRotation();
+            void GetRotation();
+        }
+
+        [ComImport]
+        [Guid("63aad0b8-7c24-40ff-85a8-640d944cc325")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface ISwapChainPanelNative
+        {
+            void SetSwapChain([In] IDXGISwapChain1 swapChain);
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct DXGI_SWAP_CHAIN_DESC1
+        {
+            public uint Width;
+            public uint Height;
+            public int Format; // DXGI_FORMAT
+            public bool Stereo;
+            public DXGI_SAMPLE_DESC SampleDesc;
+            public uint BufferUsage;
+            public uint BufferCount;
+            public DXGI_SCALING Scaling;
+            public DXGI_SWAP_EFFECT SwapEffect;
+            public DXGI_ALPHA_MODE AlphaMode;
+            public uint Flags;
+        }
+
+        public enum DXGI_SCALING
+        {
+            DXGI_SCALING_STRETCH = 0,
+            DXGI_SCALING_NONE = 1,
+            DXGI_SCALING_ASPECT_RATIO_STRETCH = 2
+        }
+
+        public enum DXGI_SWAP_EFFECT
+        {
+            DXGI_SWAP_EFFECT_DISCARD = 0,
+            DXGI_SWAP_EFFECT_SEQUENTIAL = 1,
+            DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL = 3,
+            DXGI_SWAP_EFFECT_FLIP_DISCARD = 4
+        }
+
+        public enum DXGI_ALPHA_MODE
+        {
+            DXGI_ALPHA_MODE_UNSPECIFIED = 0,
+            DXGI_ALPHA_MODE_PREMULTIPLIED = 1,
+            DXGI_ALPHA_MODE_STRAIGHT = 2,
+            DXGI_ALPHA_MODE_IGNORE = 3,
+            DXGI_ALPHA_MODE_FORCE_DWORD = -1
+        }
+        
+        public const uint DXGI_USAGE_RENDER_TARGET_OUTPUT = 32;
+        public const uint DXGI_PRESENT_DO_NOT_WAIT = 0x00000008;
+
+        public static readonly Guid IID_ID3D11Texture2D = Guid.Parse("6f15aaf2-d208-4e89-9fae-984409d4994d");
+        public static Guid IID_IDXGIFactory2 = Guid.Parse("50c83a1c-e072-4c48-87b0-3630fa36a6d0");
+
+        [ComImport]
+        [Guid("54ec77fa-1377-44e6-8c32-88fd5f44c84c")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IDXGIDevice
+        {
+            void GetAdapter([Out] out IDXGIAdapter ppAdapter);
+            void GetGPUPreference(); // Placeholder
+            void QueryResourceResidency(); // Placeholder
+            void SetGPUThreadPriority(); // Placeholder
+            void GetGPUThreadPriority(); // Placeholder
+        }
+
+        [ComImport]
+        [Guid("2411e7e1-12ac-4ccf-bd14-9798e8534dc0")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IDXGIAdapter
+        {
+            void EnumOutputs(); // Placeholder
+            void GetDesc(); // Placeholder
+            void CheckInterfaceSupport(); // Placeholder
+            void GetParent([In] ref Guid riid, [Out] out IntPtr ppParent);
+        }
+
+        [ComImport]
+        [Guid("7b7166ec-21c7-44ae-b21a-c9ae321ae369")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IDXGIFactory : IDXGIObject
+        {
+            void EnumAdapters(); // Placeholder
+            void MakeWindowAssociation(); // Placeholder
+            void GetWindowAssociation(); // Placeholder
+            void CreateSwapChain(); // Placeholder
+            void CreateSoftwareAdapter(); // Placeholder
+        }
+
+        [ComImport]
+        [Guid("aec22fb8-76f3-4639-9be0-28eb43a67a2e")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IDXGIObject
+        {
+            void SetPrivateData(); // Placeholder
+            void SetPrivateDataInterface(); // Placeholder
+            void GetPrivateData(); // Placeholder
+            void GetParent([In] ref Guid riid, [Out] out IntPtr ppParent);
+        }
     }
 }

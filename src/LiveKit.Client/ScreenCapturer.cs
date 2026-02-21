@@ -1,14 +1,16 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using LiveKit.Internal;
 using LiveKit.Proto;
-using Windows.Graphics.Capture;
-using Windows.Graphics.DirectX.Direct3D11;
-using Windows.Graphics.DirectX;
-using Windows.Graphics.Imaging;
-using WinRT;
-using System.Runtime.CompilerServices;
+// Windows-specific imports commented out for cross-platform test pattern generation
+// using Windows.Graphics.Capture;
+// using Windows.Graphics.DirectX.Direct3D11;
+// using Windows.Graphics.DirectX;
+// using Windows.Graphics.Imaging;
+// using WinRT;
+// using System.Runtime.CompilerServices;
 
 namespace LiveKit
 {
@@ -20,13 +22,16 @@ namespace LiveKit
         private readonly VideoSource _source;
         private readonly uint _width;
         private readonly uint _height;
-        private GraphicsCaptureItem? _item;
-        private Direct3D11CaptureFramePool? _framePool;
-        private GraphicsCaptureSession? _session;
-        private D3D11Interop.ID3D11Device? _d3dDevice;
-        private IDirect3DDevice? _device;
-        private object? _dispatcherQueueController;
+        // Windows-specific fields commented out
+        // private GraphicsCaptureItem? _item;
+        // private Direct3D11CaptureFramePool? _framePool;
+        // private GraphicsCaptureSession? _session;
+        // private D3D11Interop.ID3D11Device? _d3dDevice;
+        // private IDirect3DDevice? _device;
+        // private object? _dispatcherQueueController;
         private bool _disposed;
+        private CancellationTokenSource? _cancellationTokenSource;
+        private Task? _captureTask;
 
         [ComImport]
         [Guid("5B0D3235-4DBA-4D44-865E-8F1D0E4FD04D")]
@@ -45,12 +50,117 @@ namespace LiveKit
 
         public void Start()
         {
-            if (_session != null)
+            if (_captureTask != null)
                 throw new InvalidOperationException("Already capturing");
 
-            InitializeCapture();
+            _cancellationTokenSource = new CancellationTokenSource();
+            _captureTask = Task.Run(() => GenerateTestPattern(_cancellationTokenSource.Token));
+            Console.WriteLine("Started test pattern generation");
         }
 
+        private async Task GenerateTestPattern(CancellationToken cancellationToken)
+        {
+            const int fps = 30;
+            const int frameDelayMs = 1000 / fps;
+            
+            // Allocate buffer for RGBA frame
+            int bufferSize = (int)(_width * _height * 4); // 4 bytes per pixel (RGBA)
+            byte[] frameBuffer = new byte[bufferSize];
+            
+            int frameCount = 0;
+            
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    // Generate color cycling test pattern
+                    GenerateColorCyclePattern(frameBuffer, frameCount);
+                    
+                    unsafe
+                    {
+                        fixed (byte* ptr = frameBuffer)
+                        {
+                            var bufferInfo = new VideoBufferInfo
+                            {
+                                Type = VideoBufferType.Rgba,
+                                Width = _width,
+                                Height = _height,
+                                DataPtr = (ulong)ptr,
+                                Stride = _width * 4
+                            };
+
+                            var timestampUs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000;
+                            _source.CaptureFrame(bufferInfo, timestampUs);
+                        }
+                    }
+                    
+                    frameCount++;
+                    await Task.Delay(frameDelayMs, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error generating test pattern: {ex.Message}");
+                }
+            }
+        }
+
+        private void GenerateColorCyclePattern(byte[] buffer, int frameCount)
+        {
+            // Create a color cycling pattern that changes over time
+            float hue = (frameCount % 360) / 360.0f;
+            
+            for (uint y = 0; y < _height; y++)
+            {
+                for (uint x = 0; x < _width; x++)
+                {
+                    int index = (int)((y * _width + x) * 4);
+                    
+                    // Create gradient based on position and time
+                    float xRatio = x / (float)_width;
+                    float yRatio = y / (float)_height;
+                    
+                    // HSV to RGB conversion for smooth color cycling
+                    float h = (hue + xRatio * 0.3f + yRatio * 0.3f) % 1.0f;
+                    float s = 0.8f;
+                    float v = 0.9f;
+                    
+                    (byte r, byte g, byte b) = HsvToRgb(h, s, v);
+                    
+                    buffer[index] = r;     // R
+                    buffer[index + 1] = g; // G
+                    buffer[index + 2] = b; // B
+                    buffer[index + 3] = 255; // A
+                }
+            }
+        }
+
+        private static (byte r, byte g, byte b) HsvToRgb(float h, float s, float v)
+        {
+            int hi = (int)(h * 6) % 6;
+            float f = h * 6 - hi;
+            float p = v * (1 - s);
+            float q = v * (1 - f * s);
+            float t = v * (1 - (1 - f) * s);
+
+            float r, g, b;
+            switch (hi)
+            {
+                case 0: r = v; g = t; b = p; break;
+                case 1: r = q; g = v; b = p; break;
+                case 2: r = p; g = v; b = t; break;
+                case 3: r = p; g = q; b = v; break;
+                case 4: r = t; g = p; b = v; break;
+                default: r = v; g = p; b = q; break;
+            }
+
+            return ((byte)(r * 255), (byte)(g * 255), (byte)(b * 255));
+        }
+
+        /* Windows-specific capture code commented out
         private void InitializeCapture()
         {
             // 0. Ensure DispatcherQueue exists
@@ -78,6 +188,7 @@ namespace LiveKit
             
             Console.WriteLine($"Started screen capture for item: {_item.DisplayName}");
         }
+
 
         private void OnFrameArrived(Direct3D11CaptureFramePool sender, object args)
         {
@@ -141,7 +252,9 @@ namespace LiveKit
                 // Console.WriteLine($"[ProcessFrame] EXCEPTION: {ex.GetType().Name}: {ex.Message}");
             }
         }
+        */
 
+        /* All Windows-specific interop methods commented out
         private IDirect3DDevice CreateD3DDevice(out D3D11Interop.ID3D11Device d3dDevice)
         {
             // Create D3D11 Device
@@ -302,11 +415,18 @@ namespace LiveKit
                 return IntPtr.Zero;
             }
         }
+        */
 
         public void Dispose()
         {
             if (_disposed) return;
 
+            // Stop test pattern generation
+            _cancellationTokenSource?.Cancel();
+            _captureTask?.Wait(TimeSpan.FromSeconds(1));
+            _cancellationTokenSource?.Dispose();
+
+            /* Windows-specific cleanup commented out
             _session?.Dispose();
             _framePool?.Dispose();
             
@@ -324,6 +444,7 @@ namespace LiveKit
                 Marshal.Release(controllerPtr);
                 _dispatcherQueueController = null;
             }
+            */
 
             _disposed = true;
         }

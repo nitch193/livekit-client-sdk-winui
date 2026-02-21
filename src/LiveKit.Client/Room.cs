@@ -83,12 +83,22 @@ namespace LiveKit
         /// <summary>
         /// Publishes a local video track to the room.
         /// </summary>
-        public Task<TrackPublication> PublishTrackAsync(LocalVideoTrack track)
+        /// <param name="track">The track to publish.</param>
+        /// <param name="options">Optional publish options (e.g. Simulcast, VideoCodec).</param>
+        public Task<TrackPublication> PublishTrackAsync(LocalVideoTrack track, TrackPublishOptions? options = null)
         {
             if (_localParticipantHandle == 0)
                 throw new InvalidOperationException("Not connected to a room");
 
             _publishTrackTcs = new TaskCompletionSource<TrackPublication>();
+
+            var publishOptions = options ?? new TrackPublishOptions();
+            
+            // Set default source if not provided and not already set in options
+            if (publishOptions.Source == TrackSource.SourceUnknown)
+            {
+                 publishOptions.Source = TrackSource.SourceScreenshare;
+            }
 
             var request = new FfiRequest
             {
@@ -96,10 +106,7 @@ namespace LiveKit
                 {
                     LocalParticipantHandle = _localParticipantHandle,
                     TrackHandle = track.TrackHandle,
-                    Options = new TrackPublishOptions
-                    {
-                        Source = TrackSource.SourceScreenshare
-                    }
+                    Options = publishOptions
                 }
             };
 
