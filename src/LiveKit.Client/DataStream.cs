@@ -5,367 +5,383 @@ using LiveKit.Proto;
 
 namespace LiveKit
 {
+    /// <summary>
+    /// High-level data-stream API.  Every async operation gets its own private
+    /// <see cref="TaskCompletionSource{T}"/> keyed by the request's AsyncId, so
+    /// concurrent calls can never overwrite each other's completion slot (unlike
+    /// the old single-field-per-operation pattern).
+    ///
+    /// The register-before-send contract is enforced in every method:
+    ///   1. Stamp AsyncId on the request object.
+    ///   2. Register the pending callback slot.
+    ///   3. Send the request.
+    ///   4. On send failure → cancel the slot so the task doesn't hang.
+    /// </summary>
     public class DataStream
     {
         private readonly FfiClient _client;
         private readonly ulong _localParticipantHandle;
-        
-        // TaskCompletionSources for async operations
-        private TaskCompletionSource<byte[]>? _byteReadAllTcs;
-        private TaskCompletionSource<string>? _byteWriteToFileTcs;
-        private TaskCompletionSource<ulong>? _byteStreamOpenTcs;
-        private TaskCompletionSource<bool>? _byteStreamWriteTcs;
-        private TaskCompletionSource<bool>? _byteStreamCloseTcs;
-        
-        private TaskCompletionSource<string>? _textReadAllTcs;
-        private TaskCompletionSource<ulong>? _textStreamOpenTcs;
-        private TaskCompletionSource<bool>? _textStreamWriteTcs;
-        private TaskCompletionSource<bool>? _textStreamCloseTcs;
-        
-        private TaskCompletionSource<bool>? _sendFileTcs;
-        private TaskCompletionSource<bool>? _sendTextTcs;
-        
-        // Event handlers for stream events
+
+        // Push / streaming events (not one-shot, stay as events).
         public event Action<ByteStreamReaderEvent>? ByteStreamReaderEvent;
         public event Action<TextStreamReaderEvent>? TextStreamReaderEvent;
-        
+
         public DataStream(ulong localParticipantHandle)
         {
             _client = FfiClient.Instance;
             _localParticipantHandle = localParticipantHandle;
-            
-            // Subscribe to callbacks
-            _client.ByteStreamReaderReadAllReceived += OnByteStreamReaderReadAllReceived;
-            _client.ByteStreamReaderWriteToFileReceived += OnByteStreamReaderWriteToFileReceived;
-            _client.ByteStreamOpenReceived += OnByteStreamOpenReceived;
-            _client.ByteStreamWriterWriteReceived += OnByteStreamWriterWriteReceived;
-            _client.ByteStreamWriterCloseReceived += OnByteStreamWriterCloseReceived;
-            
-            _client.TextStreamReaderReadAllReceived += OnTextStreamReaderReadAllReceived;
-            _client.TextStreamOpenReceived += OnTextStreamOpenReceived;
-            _client.TextStreamWriterWriteReceived += OnTextStreamWriterWriteReceived;
-            _client.TextStreamWriterCloseReceived += OnTextStreamWriterCloseReceived;
-            
-            _client.SendFileReceived += OnSendFileReceived;
-            _client.SendTextReceived += OnSendTextReceived;
-            
+
+            // Subscribe to streaming events (non one-shot).
             _client.ByteStreamReaderEventReceived += OnByteStreamReaderEventReceived;
             _client.TextStreamReaderEventReceived += OnTextStreamReaderEventReceived;
         }
 
+        // ── Byte stream ───────────────────────────────────────────────────────────
+
         public Task<ulong> OpenByteStreamAsync(StreamByteOptions options)
         {
-            _byteStreamOpenTcs = new TaskCompletionSource<ulong>();
-            var request = new FfiRequest
+            var tcs = new TaskCompletionSource<ulong>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var req = new ByteStreamOpenRequest
             {
-                ByteStreamOpen = new ByteStreamOpenRequest
-                {
-                    LocalParticipantHandle = _localParticipantHandle,
-                    Options = options
-                }
+                LocalParticipantHandle = _localParticipantHandle,
+                Options = options
             };
-            _client.SendRequest(request);
-            return _byteStreamOpenTcs.Task;
+            var asyncId = req.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<ByteStreamOpenCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.ByteStreamOpen ? e.ByteStreamOpen : null,
+                cb =>
+                {
+                    if (cb.Error != null)
+                        tcs.TrySetException(new Exception(cb.Error.Description));
+                    else
+                    {
+                        Console.WriteLine($"Byte stream opened: {cb.Writer.Handle.Id}");
+                        tcs.TrySetResult(cb.Writer.Handle.Id);
+                    }
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            try { _client.SendRequest(new FfiRequest { ByteStreamOpen = req }); }
+            catch { _client.CancelPendingCallback(asyncId); throw; }
+
+            return tcs.Task;
         }
 
         public Task WriteByteStreamAsync(ulong writerHandle, byte[] data)
         {
-            _byteStreamWriteTcs = new TaskCompletionSource<bool>();
-            var request = new FfiRequest
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var req = new ByteStreamWriterWriteRequest
             {
-                ByteStreamWrite = new ByteStreamWriterWriteRequest
-                {
-                    WriterHandle = writerHandle,
-                    Bytes = Google.Protobuf.ByteString.CopyFrom(data)
-                }
+                WriterHandle = writerHandle,
+                Bytes = Google.Protobuf.ByteString.CopyFrom(data)
             };
-            _client.SendRequest(request);
-            return _byteStreamWriteTcs.Task;
+            var asyncId = req.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<ByteStreamWriterWriteCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.ByteStreamWriterWrite ? e.ByteStreamWriterWrite : null,
+                cb =>
+                {
+                    if (cb.Error != null)
+                        tcs.TrySetException(new Exception(cb.Error.Description));
+                    else
+                    {
+                        Console.WriteLine("Byte stream write completed");
+                        tcs.TrySetResult(true);
+                    }
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            try { _client.SendRequest(new FfiRequest { ByteStreamWrite = req }); }
+            catch { _client.CancelPendingCallback(asyncId); throw; }
+
+            return tcs.Task;
         }
 
         public Task CloseByteStreamAsync(ulong writerHandle)
         {
-            _byteStreamCloseTcs = new TaskCompletionSource<bool>();
-            var request = new FfiRequest
-            {
-                ByteStreamClose = new ByteStreamWriterCloseRequest
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var req = new ByteStreamWriterCloseRequest { WriterHandle = writerHandle };
+            var asyncId = req.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<ByteStreamWriterCloseCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.ByteStreamWriterClose ? e.ByteStreamWriterClose : null,
+                cb =>
                 {
-                    WriterHandle = writerHandle
-                }
-            };
-            _client.SendRequest(request);
-            return _byteStreamCloseTcs.Task;
-        }
+                    if (cb.Error != null)
+                        tcs.TrySetException(new Exception(cb.Error.Description));
+                    else
+                    {
+                        Console.WriteLine("Byte stream closed");
+                        tcs.TrySetResult(true);
+                    }
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
 
-        public Task<ulong> OpenTextStreamAsync(StreamTextOptions options)
-        {
-            _textStreamOpenTcs = new TaskCompletionSource<ulong>();
-            var request = new FfiRequest
-            {
-                TextStreamOpen = new TextStreamOpenRequest
-                {
-                    LocalParticipantHandle = _localParticipantHandle,
-                    Options = options
-                }
-            };
-            _client.SendRequest(request);
-            return _textStreamOpenTcs.Task;
-        }
+            try { _client.SendRequest(new FfiRequest { ByteStreamClose = req }); }
+            catch { _client.CancelPendingCallback(asyncId); throw; }
 
-        public Task WriteTextStreamAsync(ulong writerHandle, string text)
-        {
-            _textStreamWriteTcs = new TaskCompletionSource<bool>();
-            var request = new FfiRequest
-            {
-                TextStreamWrite = new TextStreamWriterWriteRequest
-                {
-                    WriterHandle = writerHandle,
-                    Text = text
-                }
-            };
-            _client.SendRequest(request);
-            return _textStreamWriteTcs.Task;
-        }
-
-        public Task CloseTextStreamAsync(ulong writerHandle)
-        {
-            _textStreamCloseTcs = new TaskCompletionSource<bool>();
-            var request = new FfiRequest
-            {
-                TextStreamClose = new TextStreamWriterCloseRequest
-                {
-                    WriterHandle = writerHandle
-                }
-            };
-            _client.SendRequest(request);
-            return _textStreamCloseTcs.Task;
-        }
-
-        public Task SendFileAsync(StreamSendFileRequest request)
-        {
-            _sendFileTcs = new TaskCompletionSource<bool>();
-            var ffiRequest = new FfiRequest
-            {
-                SendFile = request
-            };
-            // Ensure local participant handle is set if not already
-            if (request.LocalParticipantHandle == 0)
-            {
-                request.LocalParticipantHandle = _localParticipantHandle;
-            }
-            _client.SendRequest(ffiRequest);
-            return _sendFileTcs.Task;
-        }
-
-        public Task SendTextAsync(StreamSendTextRequest request)
-        {
-            _sendTextTcs = new TaskCompletionSource<bool>();
-            var ffiRequest = new FfiRequest
-            {
-                SendText = request
-            };
-            // Ensure local participant handle is set if not already
-            if (request.LocalParticipantHandle == 0)
-            {
-                request.LocalParticipantHandle = _localParticipantHandle;
-            }
-            _client.SendRequest(ffiRequest);
-            return _sendTextTcs.Task;
+            return tcs.Task;
         }
 
         public Task<byte[]> ReadAllBytesAsync(ulong readerHandle)
         {
-            _byteReadAllTcs = new TaskCompletionSource<byte[]>();
-            var request = new FfiRequest
-            {
-                ByteReadAll = new ByteStreamReaderReadAllRequest
+            var tcs = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var req = new ByteStreamReaderReadAllRequest { ReaderHandle = readerHandle };
+            var asyncId = req.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<ByteStreamReaderReadAllCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.ByteStreamReaderReadAll ? e.ByteStreamReaderReadAll : null,
+                cb =>
                 {
-                    ReaderHandle = readerHandle
-                }
-            };
-            _client.SendRequest(request);
-            return _byteReadAllTcs.Task;
+                    if (cb.Error != null)
+                        tcs.TrySetException(new Exception(cb.Error.Description));
+                    else
+                    {
+                        Console.WriteLine($"Byte stream read all completed: {cb.Content.Length} bytes");
+                        tcs.TrySetResult(cb.Content.ToByteArray());
+                    }
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            try { _client.SendRequest(new FfiRequest { ByteReadAll = req }); }
+            catch { _client.CancelPendingCallback(asyncId); throw; }
+
+            return tcs.Task;
         }
 
         public Task<string> WriteBytesToFileAsync(ulong readerHandle, string directory, string nameOverride = "")
         {
-            _byteWriteToFileTcs = new TaskCompletionSource<string>();
-            var request = new FfiRequest
+            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var req = new ByteStreamReaderWriteToFileRequest
             {
-                ByteWriteToFile = new ByteStreamReaderWriteToFileRequest
-                {
-                    ReaderHandle = readerHandle,
-                    Directory = directory,
-                    NameOverride = nameOverride
-                }
+                ReaderHandle = readerHandle,
+                Directory = directory,
+                NameOverride = nameOverride
             };
-            _client.SendRequest(request);
-            return _byteWriteToFileTcs.Task;
+            var asyncId = req.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<ByteStreamReaderWriteToFileCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.ByteStreamReaderWriteToFile ? e.ByteStreamReaderWriteToFile : null,
+                cb =>
+                {
+                    if (cb.Error != null)
+                        tcs.TrySetException(new Exception(cb.Error.Description));
+                    else
+                    {
+                        Console.WriteLine($"Byte stream written to file: {cb.FilePath}");
+                        tcs.TrySetResult(cb.FilePath);
+                    }
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            try { _client.SendRequest(new FfiRequest { ByteWriteToFile = req }); }
+            catch { _client.CancelPendingCallback(asyncId); throw; }
+
+            return tcs.Task;
+        }
+
+        public Task SendFileAsync(StreamSendFileRequest req)
+        {
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            if (req.LocalParticipantHandle == 0)
+                req.LocalParticipantHandle = _localParticipantHandle;
+
+            var asyncId = req.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<StreamSendFileCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.SendFile ? e.SendFile : null,
+                cb =>
+                {
+                    if (cb.Error != null)
+                        tcs.TrySetException(new Exception(cb.Error.Description));
+                    else
+                    {
+                        Console.WriteLine("File sent successfully");
+                        tcs.TrySetResult(true);
+                    }
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            try { _client.SendRequest(new FfiRequest { SendFile = req }); }
+            catch { _client.CancelPendingCallback(asyncId); throw; }
+
+            return tcs.Task;
+        }
+
+        // ── Text stream ───────────────────────────────────────────────────────────
+
+        public Task<ulong> OpenTextStreamAsync(StreamTextOptions options)
+        {
+            var tcs = new TaskCompletionSource<ulong>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var req = new TextStreamOpenRequest
+            {
+                LocalParticipantHandle = _localParticipantHandle,
+                Options = options
+            };
+            var asyncId = req.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<TextStreamOpenCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.TextStreamOpen ? e.TextStreamOpen : null,
+                cb =>
+                {
+                    if (cb.Error != null)
+                        tcs.TrySetException(new Exception(cb.Error.Description));
+                    else
+                    {
+                        Console.WriteLine($"Text stream opened: {cb.Writer.Handle.Id}");
+                        tcs.TrySetResult(cb.Writer.Handle.Id);
+                    }
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            try { _client.SendRequest(new FfiRequest { TextStreamOpen = req }); }
+            catch { _client.CancelPendingCallback(asyncId); throw; }
+
+            return tcs.Task;
+        }
+
+        public Task WriteTextStreamAsync(ulong writerHandle, string text)
+        {
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var req = new TextStreamWriterWriteRequest { WriterHandle = writerHandle, Text = text };
+            var asyncId = req.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<TextStreamWriterWriteCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.TextStreamWriterWrite ? e.TextStreamWriterWrite : null,
+                cb =>
+                {
+                    if (cb.Error != null)
+                        tcs.TrySetException(new Exception(cb.Error.Description));
+                    else
+                    {
+                        Console.WriteLine("Text stream write completed");
+                        tcs.TrySetResult(true);
+                    }
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            try { _client.SendRequest(new FfiRequest { TextStreamWrite = req }); }
+            catch { _client.CancelPendingCallback(asyncId); throw; }
+
+            return tcs.Task;
+        }
+
+        public Task CloseTextStreamAsync(ulong writerHandle)
+        {
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var req = new TextStreamWriterCloseRequest { WriterHandle = writerHandle };
+            var asyncId = req.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<TextStreamWriterCloseCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.TextStreamWriterClose ? e.TextStreamWriterClose : null,
+                cb =>
+                {
+                    if (cb.Error != null)
+                        tcs.TrySetException(new Exception(cb.Error.Description));
+                    else
+                    {
+                        Console.WriteLine("Text stream closed");
+                        tcs.TrySetResult(true);
+                    }
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            try { _client.SendRequest(new FfiRequest { TextStreamClose = req }); }
+            catch { _client.CancelPendingCallback(asyncId); throw; }
+
+            return tcs.Task;
         }
 
         public Task<string> ReadAllTextAsync(ulong readerHandle)
         {
-            _textReadAllTcs = new TaskCompletionSource<string>();
-            var request = new FfiRequest
-            {
-                TextReadAll = new TextStreamReaderReadAllRequest
+            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var req = new TextStreamReaderReadAllRequest { ReaderHandle = readerHandle };
+            var asyncId = req.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<TextStreamReaderReadAllCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.TextStreamReaderReadAll ? e.TextStreamReaderReadAll : null,
+                cb =>
                 {
-                    ReaderHandle = readerHandle
-                }
-            };
-            _client.SendRequest(request);
-            return _textReadAllTcs.Task;
-        }
-        
-        // Byte Stream Reader Callbacks
-        private void OnByteStreamReaderReadAllReceived(ByteStreamReaderReadAllCallback e)
-        {
-            if (e.Error != null)
-            {
-                _byteReadAllTcs?.TrySetException(new Exception(e.Error.Description));
-            }
-            else
-            {
-                _byteReadAllTcs?.TrySetResult(e.Content.ToByteArray());
-                Console.WriteLine($"Byte stream read all completed: {e.Content.Length} bytes");
-            }
+                    if (cb.Error != null)
+                        tcs.TrySetException(new Exception(cb.Error.Description));
+                    else
+                    {
+                        Console.WriteLine($"Text stream read all completed: {cb.Content.Length} characters");
+                        tcs.TrySetResult(cb.Content);
+                    }
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            try { _client.SendRequest(new FfiRequest { TextReadAll = req }); }
+            catch { _client.CancelPendingCallback(asyncId); throw; }
+
+            return tcs.Task;
         }
 
-        private void OnByteStreamReaderWriteToFileReceived(ByteStreamReaderWriteToFileCallback e)
+        public Task SendTextAsync(StreamSendTextRequest req)
         {
-            if (e.Error != null)
-            {
-                _byteWriteToFileTcs?.TrySetException(new Exception(e.Error.Description));
-            }
-            else
-            {
-                _byteWriteToFileTcs?.TrySetResult(e.FilePath);
-                Console.WriteLine($"Byte stream written to file: {e.FilePath}");
-            }
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            if (req.LocalParticipantHandle == 0)
+                req.LocalParticipantHandle = _localParticipantHandle;
+
+            var asyncId = req.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<StreamSendTextCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.SendText ? e.SendText : null,
+                cb =>
+                {
+                    if (cb.Error != null)
+                        tcs.TrySetException(new Exception(cb.Error.Description));
+                    else
+                    {
+                        Console.WriteLine("Text sent successfully");
+                        tcs.TrySetResult(true);
+                    }
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            try { _client.SendRequest(new FfiRequest { SendText = req }); }
+            catch { _client.CancelPendingCallback(asyncId); throw; }
+
+            return tcs.Task;
         }
 
-        // Byte Stream Writer Callbacks
-        private void OnByteStreamOpenReceived(ByteStreamOpenCallback e)
-        {
-            if (e.Error != null)
-            {
-                _byteStreamOpenTcs?.TrySetException(new Exception(e.Error.Description));
-            }
-            else
-            {
-                _byteStreamOpenTcs?.TrySetResult(e.Writer.Handle.Id);
-                Console.WriteLine($"Byte stream opened: {e.Writer.Handle.Id}");
-            }
-        }
+        // ── Streaming event handlers ──────────────────────────────────────────────
 
-        private void OnByteStreamWriterWriteReceived(ByteStreamWriterWriteCallback e)
-        {
-            if (e.Error != null)
-            {
-                _byteStreamWriteTcs?.TrySetException(new Exception(e.Error.Description));
-            }
-            else
-            {
-                _byteStreamWriteTcs?.TrySetResult(true);
-                Console.WriteLine("Byte stream write completed");
-            }
-        }
-
-        private void OnByteStreamWriterCloseReceived(ByteStreamWriterCloseCallback e)
-        {
-            if (e.Error != null)
-            {
-                _byteStreamCloseTcs?.TrySetException(new Exception(e.Error.Description));
-            }
-            else
-            {
-                _byteStreamCloseTcs?.TrySetResult(true);
-                Console.WriteLine("Byte stream closed");
-            }
-        }
-
-        // Text Stream Reader Callbacks
-        private void OnTextStreamReaderReadAllReceived(TextStreamReaderReadAllCallback e)
-        {
-            if (e.Error != null)
-            {
-                _textReadAllTcs?.TrySetException(new Exception(e.Error.Description));
-            }
-            else
-            {
-                _textReadAllTcs?.TrySetResult(e.Content);
-                Console.WriteLine($"Text stream read all completed: {e.Content.Length} characters");
-            }
-        }
-
-        // Text Stream Writer Callbacks
-        private void OnTextStreamOpenReceived(TextStreamOpenCallback e)
-        {
-            if (e.Error != null)
-            {
-                _textStreamOpenTcs?.TrySetException(new Exception(e.Error.Description));
-            }
-            else
-            {
-                _textStreamOpenTcs?.TrySetResult(e.Writer.Handle.Id);
-                Console.WriteLine($"Text stream opened: {e.Writer.Handle.Id}");
-            }
-        }
-
-        private void OnTextStreamWriterWriteReceived(TextStreamWriterWriteCallback e)
-        {
-            if (e.Error != null)
-            {
-                _textStreamWriteTcs?.TrySetException(new Exception(e.Error.Description));
-            }
-            else
-            {
-                _textStreamWriteTcs?.TrySetResult(true);
-                Console.WriteLine("Text stream write completed");
-            }
-        }
-
-        private void OnTextStreamWriterCloseReceived(TextStreamWriterCloseCallback e)
-        {
-            if (e.Error != null)
-            {
-                _textStreamCloseTcs?.TrySetException(new Exception(e.Error.Description));
-            }
-            else
-            {
-                _textStreamCloseTcs?.TrySetResult(true);
-                Console.WriteLine("Text stream closed");
-            }
-        }
-
-        // File Transfer Callbacks
-        private void OnSendFileReceived(StreamSendFileCallback e)
-        {
-            if (e.Error != null)
-            {
-                _sendFileTcs?.TrySetException(new Exception(e.Error.Description));
-            }
-            else
-            {
-                _sendFileTcs?.TrySetResult(true);
-                Console.WriteLine("File sent successfully");
-            }
-        }
-
-        private void OnSendTextReceived(StreamSendTextCallback e)
-        {
-            if (e.Error != null)
-            {
-                _sendTextTcs?.TrySetException(new Exception(e.Error.Description));
-            }
-            else
-            {
-                _sendTextTcs?.TrySetResult(true);
-                Console.WriteLine("Text sent successfully");
-            }
-        }
-
-        // Stream Event Callbacks
         private void OnByteStreamReaderEventReceived(ByteStreamReaderEvent e)
         {
             Console.WriteLine($"Byte stream reader event: {e.DetailCase}");

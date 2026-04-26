@@ -8,171 +8,296 @@ namespace LiveKit
     public class Room
     {
         private readonly FfiClient _client;
-        private TaskCompletionSource<bool>? _connectTcs;
         private ulong _roomHandle;
         private ulong _localParticipantHandle;
 
         public ulong LocalParticipantHandle => _localParticipantHandle;
-        private TaskCompletionSource<TrackPublication>? _publishTrackTcs;
-        private TaskCompletionSource<bool>? _unpublishTrackTcs;
-        private TaskCompletionSource<bool>? _setMetadataTcs;
-        private TaskCompletionSource<bool>? _setNameTcs;
-        private TaskCompletionSource<bool>? _setAttributesTcs;
 
-        public event Action<RoomEvent>? RoomEventReceived;
+        // Push / streaming events that the app layer subscribes to.
+        public event Action<RoomEvent>?        RoomEventReceived;
         public event Action<VideoStreamEvent>? VideoStreamEventReceived;
 
         public Room()
         {
             _client = FfiClient.Instance;
-            _client.Initialize();
-            _client.ConnectReceived += OnConnectReceived;
-            _client.DisconnectReceived += OnDisconnectReceived;
-            _client.RoomEventReceived += OnRoomEventReceived;
-            _client.PublishTrackReceived += OnPublishTrackReceived;
-            _client.UnpublishTrackReceived += OnUnpublishTrackReceived;
-            _client.TrackEventReceived += OnTrackEventReceived;
-            _client.SetLocalMetadataReceived += OnSetLocalMetadataReceived;
-            _client.SetLocalNameReceived += OnSetLocalNameReceived;
-            _client.SetLocalAttributesReceived += OnSetLocalAttributesReceived;
-            _client.GetSessionStatsReceived += OnGetSessionStatsReceived;
-            _client.PerformRpcReceived += OnPerformRpcReceived;
+            _client.RoomEventReceived           += OnRoomEventReceived;
+            _client.TrackEventReceived          += OnTrackEventReceived;
+            _client.VideoStreamEventReceived    += OnVideoStreamEventReceived;
             _client.RpcMethodInvocationReceived += OnRpcMethodInvocationReceived;
-            _client.VideoStreamEventReceived += OnVideoStreamEventReceived;
         }
 
+        // ── Connect ──────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Connects to a LiveKit room and awaits the async response from Rust.
+        ///
+        /// Safety invariant: the pending callback is registered BEFORE
+        /// <see cref="FfiClient.SendRequest"/> is called, which prevents the race
+        /// where Rust emits the callback before Unity has a slot ready for it.
+        ///
+        /// Each call creates its own <see cref="TaskCompletionSource{T}"/> so two
+        /// simultaneous calls never share the same slot (unlike the old single-field
+        /// pattern that silently overwrote the previous TCS).
+        /// </summary>
         public Task ConnectAsync(string url, string token)
         {
-            _connectTcs = new TaskCompletionSource<bool>();
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            var request = new FfiRequest
-            {
-                Connect = new ConnectRequest
-                {
-                    Url = url,
-                    Token = token
-                }
-            };
+            var connectRequest = new ConnectRequest { Url = url, Token = token };
 
-            var response = _client.SendRequest(request);
-            
-            if (response.Connect != null)
-            {
-                if (response.Connect.AsyncId == 0)
+            // 1. Generate a unique async id and stamp it on the request.
+            var asyncId = connectRequest.InitializeRequestAsyncId();
+
+            // 2. Register the completion slot BEFORE sending.
+            _client.RegisterPendingCallback<ConnectCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.Connect ? e.Connect : null,
+                cb =>
                 {
-                   // Handle synchronous failure if applicable, though AsyncId 0 usually means invalid request or similar.
-                }
+                    if (!string.IsNullOrEmpty(cb.Error))
+                    {
+                        tcs.TrySetException(new Exception(cb.Error));
+                    }
+                    else
+                    {
+                        _roomHandle              = cb.Result.Room.Handle.Id;
+                        _localParticipantHandle  = cb.Result.LocalParticipant.Handle.Id;
+                        Console.WriteLine($"Connected to room: {cb.Result.Room.Info.Name}");
+                        tcs.TrySetResult(true);
+                    }
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            // 3. Send after registration — Rust can now arrive any time, slot is ready.
+            var request = new FfiRequest { Connect = connectRequest };
+            try
+            {
+                _client.SendRequest(request);
+            }
+            catch
+            {
+                // SendRequest failed before Rust had a chance to echo the id back.
+                // Cancel the pending slot so the task doesn't hang.
+                _client.CancelPendingCallback(asyncId);
+                throw;
             }
 
-            return _connectTcs.Task;
+            return tcs.Task;
         }
+
+        // ── Disconnect ───────────────────────────────────────────────────────────
 
         public Task DisconnectAsync()
         {
-             var request = new FfiRequest
+            var request = new FfiRequest
             {
-                Disconnect = new DisconnectRequest
-                {
-                    RoomHandle = _roomHandle
-                }
+                Disconnect = new DisconnectRequest { RoomHandle = _roomHandle }
             };
             _client.SendRequest(request);
             return Task.CompletedTask;
         }
 
+        // ── Publish track ────────────────────────────────────────────────────────
+
         /// <summary>
-        /// Publishes a local video track to the room.
+        /// Publishes a local video track and awaits the async confirmation from Rust.
+        /// Each call owns its own TCS — concurrent publish calls are now safe.
         /// </summary>
-        /// <param name="track">The track to publish.</param>
-        /// <param name="options">Optional publish options (e.g. Simulcast, VideoCodec).</param>
-        public Task<TrackPublication> PublishTrackAsync(LocalVideoTrack track, TrackPublishOptions? options = null)
+        public Task<TrackPublication> PublishTrackAsync(
+            LocalVideoTrack track,
+            TrackPublishOptions? options = null)
         {
             if (_localParticipantHandle == 0)
                 throw new InvalidOperationException("Not connected to a room");
 
-            _publishTrackTcs = new TaskCompletionSource<TrackPublication>();
+            var tcs = new TaskCompletionSource<TrackPublication>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
 
             var publishOptions = options ?? new TrackPublishOptions();
-            
-            // Set default source if not provided and not already set in options
             if (publishOptions.Source == TrackSource.SourceUnknown)
-            {
-                 publishOptions.Source = TrackSource.SourceScreenshare;
-            }
+                publishOptions.Source = TrackSource.SourceScreenshare;
 
-            var request = new FfiRequest
+            var publishRequest = new PublishTrackRequest
             {
-                PublishTrack = new PublishTrackRequest
-                {
-                    LocalParticipantHandle = _localParticipantHandle,
-                    TrackHandle = track.TrackHandle,
-                    Options = publishOptions
-                }
+                LocalParticipantHandle = _localParticipantHandle,
+                TrackHandle            = track.TrackHandle,
+                Options                = publishOptions
             };
 
-            var response = _client.SendRequest(request);
-            
-            if (response.PublishTrack == null)
+            var asyncId = publishRequest.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<PublishTrackCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.PublishTrack ? e.PublishTrack : null,
+                cb =>
+                {
+                    if (!string.IsNullOrEmpty(cb.Error))
+                        tcs.TrySetException(new Exception(cb.Error));
+                    else
+                    {
+                        Console.WriteLine("Track published successfully");
+                        tcs.TrySetResult(new TrackPublication(cb.AsyncId, cb.Publication.Info));
+                    }
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            var request = new FfiRequest { PublishTrack = publishRequest };
+            try
             {
-                throw new Exception("Failed to publish track");
+                var response = _client.SendRequest(request);
+                if (response.PublishTrack == null)
+                    throw new Exception("Failed to publish track: empty response");
+            }
+            catch
+            {
+                _client.CancelPendingCallback(asyncId);
+                throw;
             }
 
-            return _publishTrackTcs.Task;
+            return tcs.Task;
         }
 
-        public Task<OwnedVideoStream> GetVideoStreamAsync(ulong trackHandle, VideoStreamType type = VideoStreamType.VideoStreamNative)
+        // ── Unpublish track ──────────────────────────────────────────────────────
+
+        public Task UnpublishTrackAsync(ulong trackSid)
+        {
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var unpublishRequest = new UnpublishTrackRequest
+            {
+                LocalParticipantHandle = _localParticipantHandle,
+                TrackSid               = trackSid.ToString()
+            };
+
+            var asyncId = unpublishRequest.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<UnpublishTrackCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.UnpublishTrack ? e.UnpublishTrack : null,
+                cb =>
+                {
+                    if (!string.IsNullOrEmpty(cb.Error))
+                        tcs.TrySetException(new Exception(cb.Error));
+                    else
+                    {
+                        Console.WriteLine("Track unpublished");
+                        tcs.TrySetResult(true);
+                    }
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            var request = new FfiRequest { UnpublishTrack = unpublishRequest };
+            try { _client.SendRequest(request); }
+            catch { _client.CancelPendingCallback(asyncId); throw; }
+
+            return tcs.Task;
+        }
+
+        // ── Video stream ─────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Creates a video stream for the given remote track handle.
+        /// This is a synchronous round-trip (response arrives inside SendRequest).
+        /// </summary>
+        public Task<OwnedVideoStream> GetVideoStreamAsync(
+            ulong trackHandle,
+            VideoStreamType type = VideoStreamType.VideoStreamNative)
         {
             var request = new FfiRequest
             {
                 NewVideoStream = new NewVideoStreamRequest
                 {
                     TrackHandle = trackHandle,
-                    Type = type,
-                    Format = VideoBufferType.Rgba
+                    Type        = type,
+                    Format      = VideoBufferType.Rgba
                 }
             };
 
             var response = _client.SendRequest(request);
 
-            if (response.NewVideoStream == null || response.NewVideoStream.Stream == null)
-            {
+            if (response.NewVideoStream?.Stream == null)
                 throw new Exception("Failed to create video stream");
-            }
 
             return Task.FromResult(response.NewVideoStream.Stream);
         }
 
-        private void OnConnectReceived(ConnectCallback e)
+        // ── Set local metadata ───────────────────────────────────────────────────
+
+        public Task SetLocalMetadataAsync(string metadata)
         {
-            if (!string.IsNullOrEmpty(e.Error))
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var metadataRequest = new SetLocalMetadataRequest
             {
-                _connectTcs?.TrySetException(new Exception(e.Error));
-            }
-            else
-            {
-                // Store handles for later use
-                _roomHandle = e.Result.Room.Handle.Id;
-                _localParticipantHandle = e.Result.LocalParticipant.Handle.Id;
-                
-                _connectTcs?.TrySetResult(true);
-                Console.WriteLine($"Connected to room: {e.Result.Room.Info.Name}");
-            }
+                LocalParticipantHandle = _localParticipantHandle,
+                Metadata               = metadata
+            };
+
+            var asyncId = metadataRequest.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<SetLocalMetadataCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.SetLocalMetadata ? e.SetLocalMetadata : null,
+                cb =>
+                {
+                    if (!string.IsNullOrEmpty(cb.Error))
+                        tcs.TrySetException(new Exception(cb.Error));
+                    else
+                        tcs.TrySetResult(true);
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            try { _client.SendRequest(new FfiRequest { SetLocalMetadata = metadataRequest }); }
+            catch { _client.CancelPendingCallback(asyncId); throw; }
+
+            return tcs.Task;
         }
 
-        private void OnDisconnectReceived(DisconnectCallback e)
+        // ── Set local name ───────────────────────────────────────────────────────
+
+        public Task SetLocalNameAsync(string name)
         {
-            Console.WriteLine("Disconnected");
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var nameRequest = new SetLocalNameRequest
+            {
+                LocalParticipantHandle = _localParticipantHandle,
+                Name                   = name
+            };
+
+            var asyncId = nameRequest.InitializeRequestAsyncId();
+
+            _client.RegisterPendingCallback<SetLocalNameCallback>(
+                asyncId,
+                e => e.MessageCase == FfiEvent.MessageOneofCase.SetLocalName ? e.SetLocalName : null,
+                cb =>
+                {
+                    if (!string.IsNullOrEmpty(cb.Error))
+                        tcs.TrySetException(new Exception(cb.Error));
+                    else
+                        tcs.TrySetResult(true);
+                },
+                onCancel: () => tcs.TrySetCanceled()
+            );
+
+            try { _client.SendRequest(new FfiRequest { SetLocalName = nameRequest }); }
+            catch { _client.CancelPendingCallback(asyncId); throw; }
+
+            return tcs.Task;
         }
+
+        // ── General event handlers ───────────────────────────────────────────────
 
         private void OnRoomEventReceived(RoomEvent e)
         {
-            // Console.WriteLine($"Room Event: {e.MessageCase}");
-            RoomEventReceived?.Invoke(e);
-            
             if (e.ParticipantConnected != null)
-            {
                 Console.WriteLine($"Participant Connected: {e.ParticipantConnected.Info.Info.Identity}");
-            }
+
+            RoomEventReceived?.Invoke(e);
         }
 
         private void OnVideoStreamEventReceived(VideoStreamEvent e)
@@ -180,94 +305,14 @@ namespace LiveKit
             VideoStreamEventReceived?.Invoke(e);
         }
 
-        private void OnPublishTrackReceived(PublishTrackCallback e)
-        {
-            if (!string.IsNullOrEmpty(e.Error))
-            {
-                _publishTrackTcs?.TrySetException(new Exception(e.Error));
-            }
-            else
-            {
-                var publication = new TrackPublication(e.AsyncId, e.Publication.Info);
-                _publishTrackTcs?.TrySetResult(publication);
-                Console.WriteLine($"Track published successfully");
-            }
-        }
-
-        private void OnUnpublishTrackReceived(UnpublishTrackCallback e)
-        {
-            if (!string.IsNullOrEmpty(e.Error))
-            {
-                _unpublishTrackTcs?.TrySetException(new Exception(e.Error));
-            }
-            else
-            {
-                _unpublishTrackTcs?.TrySetResult(true);
-                Console.WriteLine("Track unpublished");
-            }
-        }
-
         private void OnTrackEventReceived(TrackEvent e)
         {
             Console.WriteLine("Track event received");
-            // Handle track subscribed, unsubscribed, muted, etc.
-        }
-
-        private void OnSetLocalMetadataReceived(SetLocalMetadataCallback e)
-        {
-            if (!string.IsNullOrEmpty(e.Error))
-            {
-                _setMetadataTcs?.TrySetException(new Exception(e.Error));
-            }
-            else
-            {
-                _setMetadataTcs?.TrySetResult(true);
-                Console.WriteLine("Local metadata set");
-            }
-        }
-
-        private void OnSetLocalNameReceived(SetLocalNameCallback e)
-        {
-            if (!string.IsNullOrEmpty(e.Error))
-            {
-                _setNameTcs?.TrySetException(new Exception(e.Error));
-            }
-            else
-            {
-                _setNameTcs?.TrySetResult(true);
-                Console.WriteLine("Local name set");
-            }
-        }
-
-        private void OnSetLocalAttributesReceived(SetLocalAttributesCallback e)
-        {
-            if (!string.IsNullOrEmpty(e.Error))
-            {
-                _setAttributesTcs?.TrySetException(new Exception(e.Error));
-            }
-            else
-            {
-                _setAttributesTcs?.TrySetResult(true);
-                Console.WriteLine("Local attributes set");
-            }
-        }
-
-        private void OnGetSessionStatsReceived(GetSessionStatsCallback e)
-        {
-            Console.WriteLine("Session stats received");
-            // Handle session statistics
-        }
-
-        private void OnPerformRpcReceived(PerformRpcCallback e)
-        {
-            Console.WriteLine($"RPC completed: {e.AsyncId}");
-            // Handle RPC completion
         }
 
         private void OnRpcMethodInvocationReceived(RpcMethodInvocationEvent e)
         {
             Console.WriteLine($"RPC method invocation: {e.InvocationId}");
-            // Handle incoming RPC calls
         }
     }
 }
