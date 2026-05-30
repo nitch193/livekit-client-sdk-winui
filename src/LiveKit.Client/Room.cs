@@ -1,15 +1,19 @@
 using System;
+using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using LiveKit.Internal;
 using LiveKit.Proto;
 
 namespace LiveKit
 {
-    public class Room
+    public class Room : IDisposable
     {
         private readonly FfiClient _client;
-        private ulong _roomHandle;
+        private FfiHandle? _roomHandle;
         private ulong _localParticipantHandle;
+        private readonly ConcurrentDictionary<ulong, TrackPublication> _trackPublications = new();
+        private bool _disposed;
+        private readonly object _cleanupLock = new();
 
         public ulong LocalParticipantHandle => _localParticipantHandle;
 
@@ -60,7 +64,7 @@ namespace LiveKit
                     }
                     else
                     {
-                        _roomHandle              = cb.Result.Room.Handle.Id;
+                        _roomHandle              = FfiHandle.FromOwnedHandle(cb.Result.Room.Handle);
                         _localParticipantHandle  = cb.Result.LocalParticipant.Handle.Id;
                         Console.WriteLine($"Connected to room: {cb.Result.Room.Info.Name}");
                         tcs.TrySetResult(true);
@@ -90,11 +94,19 @@ namespace LiveKit
 
         public Task DisconnectAsync()
         {
+            var handleId = _roomHandle?.DangerousGetHandle() ?? IntPtr.Zero;
             var request = new FfiRequest
             {
-                Disconnect = new DisconnectRequest { RoomHandle = _roomHandle }
+                Disconnect = new DisconnectRequest { RoomHandle = (ulong)handleId.ToInt64() }
             };
-            _client.SendRequest(request);
+            try
+            {
+                _client.SendRequest(request);
+            }
+            finally
+            {
+                Cleanup();
+            }
             return Task.CompletedTask;
         }
 
@@ -137,7 +149,10 @@ namespace LiveKit
                     else
                     {
                         Console.WriteLine("Track published successfully");
-                        tcs.TrySetResult(new TrackPublication(cb.AsyncId, cb.Publication.Info));
+                        var publicationHandle = FfiHandle.FromOwnedHandle(cb.Publication.Handle);
+                        var pub = new TrackPublication(cb.AsyncId, cb.Publication.Info, publicationHandle);
+                        _trackPublications[cb.Publication.Handle.Id] = pub;
+                        tcs.TrySetResult(pub);
                     }
                 },
                 onCancel: () => tcs.TrySetCanceled()
@@ -294,6 +309,8 @@ namespace LiveKit
 
         private void OnRoomEventReceived(RoomEvent e)
         {
+            if (_disposed) return;
+
             if (e.ParticipantConnected != null)
                 Console.WriteLine($"Participant Connected: {e.ParticipantConnected.Info.Info.Identity}");
 
@@ -302,17 +319,51 @@ namespace LiveKit
 
         private void OnVideoStreamEventReceived(VideoStreamEvent e)
         {
+            if (_disposed) return;
             VideoStreamEventReceived?.Invoke(e);
         }
 
         private void OnTrackEventReceived(TrackEvent e)
         {
+            if (_disposed) return;
             Console.WriteLine("Track event received");
         }
 
         private void OnRpcMethodInvocationReceived(RpcMethodInvocationEvent e)
         {
+            if (_disposed) return;
             Console.WriteLine($"RPC method invocation: {e.InvocationId}");
+        }
+
+        // ── Disposal and Cleanup ─────────────────────────────────────────────────
+
+        private void Cleanup()
+        {
+            lock (_cleanupLock)
+            {
+                if (_disposed) return;
+                _disposed = true;
+
+                _client.RoomEventReceived           -= OnRoomEventReceived;
+                _client.TrackEventReceived          -= OnTrackEventReceived;
+                _client.VideoStreamEventReceived    -= OnVideoStreamEventReceived;
+                _client.RpcMethodInvocationReceived -= OnRpcMethodInvocationReceived;
+
+                _roomHandle?.Dispose();
+                _roomHandle = null;
+
+                foreach (var pub in _trackPublications.Values)
+                {
+                    pub.Dispose();
+                }
+                _trackPublications.Clear();
+            }
+        }
+
+        public void Dispose()
+        {
+            Cleanup();
+            GC.SuppressFinalize(this);
         }
     }
 }

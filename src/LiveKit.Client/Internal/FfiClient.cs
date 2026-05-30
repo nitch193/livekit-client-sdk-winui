@@ -5,6 +5,9 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using LiveKit.Proto;
 using Microsoft.UI.Dispatching;
+using LiveKit.Internal.FFIClients;
+using LiveKit.Internal.FFIClients.Pools;
+using LiveKit.Internal.FFIClients.Pools.Memory;
 
 namespace LiveKit.Internal
 {
@@ -35,7 +38,7 @@ namespace LiveKit.Internal
     ///   per call), pinned with 'fixed' only for the duration of the native call,
     ///   then returned deterministically in a finally block.
     /// </summary>
-    internal sealed class FfiClient : IDisposable
+    internal sealed class FfiClient : IFFIClient
     {
         private static readonly Lazy<FfiClient> _instance = new(() => new FfiClient());
         public static FfiClient Instance => _instance.Value;
@@ -65,6 +68,11 @@ namespace LiveKit.Internal
         //     transaction is needed
         private readonly ConcurrentDictionary<ulong, PendingCallbackBase> _pendingCallbacks = new();
 
+        // Pools for FfiResponse and Memory
+        private readonly IObjectPool<FfiResponse> _ffiResponsePool;
+        private readonly MessageParser<FfiResponse> _responseParser;
+        private readonly IMemoryPool _memoryPool;
+
         // ── Push / streaming events (not one-shot, stay as events) ──────────────
         public event Action<RoomEvent>?          RoomEventReceived;
         public event Action<TrackEvent>?         TrackEventReceived;
@@ -74,7 +82,16 @@ namespace LiveKit.Internal
         public event Action<ByteStreamReaderEvent>?    ByteStreamReaderEventReceived;
         public event Action<TextStreamReaderEvent>?    TextStreamReaderEventReceived;
 
-        private FfiClient() { }
+        private FfiClient() : this(Pools.NewFfiResponsePool(), new ArrayMemoryPool())
+        {
+        }
+
+        internal FfiClient(IObjectPool<FfiResponse> ffiResponsePool, IMemoryPool memoryPool)
+        {
+            _ffiResponsePool = ffiResponsePool;
+            _memoryPool = memoryPool;
+            _responseParser = new MessageParser<FfiResponse>(_ffiResponsePool.Get);
+        }
 
         // ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -140,11 +157,12 @@ namespace LiveKit.Internal
             ulong requestAsyncId,
             Func<FfiEvent, TCallback?> selector,
             Action<TCallback> onComplete,
-            Action? onCancel = null) where TCallback : class
+            Action? onCancel = null,
+            bool dispatchToMainThread = true) where TCallback : class
         {
             if (requestAsyncId == 0) return; // fire-and-forget request type — no callback expected
 
-            var pending = new PendingCallback<TCallback>(selector, onComplete, onCancel);
+            var pending = new PendingCallback<TCallback>(selector, onComplete, onCancel, dispatchToMainThread);
             if (!_pendingCallbacks.TryAdd(requestAsyncId, pending))
             {
                 // Two requests sharing the same id would corrupt each other's completion.
@@ -189,13 +207,13 @@ namespace LiveKit.Internal
         public FfiResponse SendRequest(FfiRequest request)
         {
             int size = request.CalculateSize();
-            // Rent from the shared system pool — well-tuned and allocation-free.
-            byte[] buffer = ArrayPool<byte>.Shared.Rent(size);
+            using var memory = _memoryPool.Memory(size);
+            byte[] buffer = memory.DangerousBuffer();
             try
             {
                 unsafe
                 {
-                    request.WriteTo(new Span<byte>(buffer, 0, size));
+                    request.WriteTo(memory.Span());
                     fixed (byte* requestDataPtr = buffer)
                     {
                         var handle = NativeMethods.FfiNewRequest(
@@ -205,7 +223,7 @@ namespace LiveKit.Internal
                             out UIntPtr dataLen);
 
                         var dataSpan = new Span<byte>(dataPtr, (int)dataLen.ToUInt64());
-                        var response = FfiResponse.Parser.ParseFrom(dataSpan);
+                        var response = _responseParser.ParseFrom(dataSpan);
                         NativeMethods.FfiDropHandle(handle);
                         return response;
                     }
@@ -216,11 +234,11 @@ namespace LiveKit.Internal
                 Console.Error.WriteLine($"[LiveKit] SendRequest failed: {ex}");
                 throw new Exception("Cannot send FFI request", ex);
             }
-            finally
-            {
-                // Return the rented buffer unconditionally — even if parsing throws.
-                ArrayPool<byte>.Shared.Return(buffer);
-            }
+        }
+
+        public void Release(FfiResponse response)
+        {
+            _ffiResponsePool.Release(response);
         }
 
         // ── Native callback ──────────────────────────────────────────────────────
@@ -249,6 +267,22 @@ namespace LiveKit.Internal
                 return;
             }
 
+            // Route background events (Logs, ByteStreamReaderEvent, TextStreamReaderEvent) directly on the Rust thread
+            if (ffiEvent.MessageCase == FfiEvent.MessageOneofCase.Logs ||
+                ffiEvent.MessageCase == FfiEvent.MessageOneofCase.ByteStreamReaderEvent ||
+                ffiEvent.MessageCase == FfiEvent.MessageOneofCase.TextStreamReaderEvent)
+            {
+                DispatchEvent(ffiEvent);
+                return;
+            }
+
+            // Fast-path bypass for async completions that don't touch UI elements.
+            if (TrySkipDispatch(ffiEvent))
+            {
+                DispatchEvent(ffiEvent);
+                return;
+            }
+
             // Route all other events.
             if (Instance._hasDispatcherQueue && Instance._dispatcherQueue != null)
             {
@@ -267,6 +301,16 @@ namespace LiveKit.Internal
                 if (!Instance._isDisposed)
                     DispatchEvent(ffiEvent);
             }
+        }
+
+        private static bool TrySkipDispatch(FfiEvent ffiEvent)
+        {
+            var asyncId = ExtractRequestAsyncId(ffiEvent);
+            if (asyncId.HasValue && Instance._pendingCallbacks.TryGetValue(asyncId.Value, out var pending))
+            {
+                return !pending.DispatchToMainThread;
+            }
+            return false;
         }
 
         // ── Event dispatch ───────────────────────────────────────────────────────
@@ -383,6 +427,7 @@ namespace LiveKit.Internal
         {
             public abstract bool TryComplete(FfiEvent ffiEvent);
             public abstract void Cancel();
+            public abstract bool DispatchToMainThread { get; }
         }
 
         private sealed class PendingCallback<TCallback> : PendingCallbackBase
@@ -391,15 +436,20 @@ namespace LiveKit.Internal
             private readonly Func<FfiEvent, TCallback?> _selector;
             private readonly Action<TCallback>          _onComplete;
             private readonly Action?                    _onCancel;
+            private readonly bool                       _dispatchToMainThread;
+
+            public override bool DispatchToMainThread => _dispatchToMainThread;
 
             public PendingCallback(
                 Func<FfiEvent, TCallback?> selector,
                 Action<TCallback>          onComplete,
-                Action?                    onCancel)
+                Action?                    onCancel,
+                bool                       dispatchToMainThread = true)
             {
                 _selector   = selector;
                 _onComplete = onComplete;
                 _onCancel   = onCancel;
+                _dispatchToMainThread = dispatchToMainThread;
             }
 
             // Runs on the UI DispatcherQueue thread (same as the old event-based path).

@@ -222,6 +222,41 @@ namespace LiveKit.Client
             }
         }
 
+        /// <summary>
+        /// Highly optimized ingestion overload that copies the pixels directly from the native
+        /// VideoFrameBuffer, completely eliminating intermediate managed byte array allocations.
+        /// </summary>
+        public void UpdateFrame(VideoFrameBuffer frameBuffer)
+        {
+            if (_disposed || frameBuffer == null) return;
+
+            var info = frameBuffer.Info;
+            int width = (int)info.Width;
+            int height = (int)info.Height;
+            int byteCount = width * height * 4;
+
+            // Reuse or allocate direct ingestion buffer
+            if (_swapBuffer == null || _swapBuffer.Length < byteCount)
+            {
+                _swapBuffer = new byte[byteCount];
+            }
+
+            System.Runtime.InteropServices.Marshal.Copy((IntPtr)info.DataPtr, _swapBuffer, 0, byteCount);
+
+            // Create the new frame container
+            var frame = new VideoFrame
+            {
+                Data = _swapBuffer,
+                Width = width,
+                Height = height,
+                Timestamp = frameBuffer.TimestampUs
+            };
+
+            if (_frameChannel.Writer.TryWrite(frame))
+            {
+            }
+        }
+
         // Updates the current video frame with new data.
         public void UpdateFrame(byte[] frameData, int width, int height)
         {

@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.UI.Xaml;
 using Microsoft.UI.Dispatching;
@@ -22,37 +23,67 @@ namespace LiveKit.Client
             _canvasDevice = CanvasDevice.GetSharedDevice();
         }
 
-        public void Render(VideoBufferInfo info)
+        public Task Render(VideoBufferInfo info)
         {
-            if (info == null || info.DataPtr == 0) return;
+            if (info == null || info.DataPtr == 0) return Task.CompletedTask;
 
             int width = (int)info.Width;
             int height = (int)info.Height;
 
-            _dispatcherQueue.TryEnqueue(() =>
+            if (_dispatcherQueue != null && !_dispatcherQueue.HasThreadAccess)
             {
-                EnsureSwapChain(width, height);
-
-                using (var session = _swapChain.CreateDrawingSession(Microsoft.UI.Colors.Transparent))
+                var tcs = new TaskCompletionSource<bool>();
+                _dispatcherQueue.TryEnqueue(() =>
                 {
-                    // Create a temporary bitmap from the raw pointer
-                    // Assuming RGBA/BGRA natively from LiveKit. If it's I420, it requires conversion first.
-                    int byteCount = width * height * 4; 
-                    byte[] frameData = new byte[byteCount];
-                    Marshal.Copy((IntPtr)info.DataPtr, frameData, 0, byteCount);
-
-                    using (var bitmap = CanvasBitmap.CreateFromBytes(
-                        _canvasDevice, 
-                        frameData, 
-                        width, 
-                        height, 
-                        DirectXPixelFormat.B8G8R8A8UIntNormalized))
+                    try
                     {
-                        session.DrawImage(bitmap);
+                        RenderInternal(info, width, height);
+                        tcs.SetResult(true);
                     }
+                    catch (Exception ex)
+                    {
+                        tcs.SetException(ex);
+                    }
+                });
+                return tcs.Task;
+            }
+            else
+            {
+                try
+                {
+                    RenderInternal(info, width, height);
                 }
-                _swapChain.Present();
-            });
+                catch (Exception ex)
+                {
+                    return Task.FromException(ex);
+                }
+                return Task.CompletedTask;
+            }
+        }
+
+        private void RenderInternal(VideoBufferInfo info, int width, int height)
+        {
+            EnsureSwapChain(width, height);
+
+            using (var session = _swapChain.CreateDrawingSession(Microsoft.UI.Colors.Transparent))
+            {
+                // Create a temporary bitmap from the raw pointer
+                // Assuming RGBA/BGRA natively from LiveKit. If it's I420, it requires conversion first.
+                int byteCount = width * height * 4; 
+                byte[] frameData = new byte[byteCount];
+                Marshal.Copy((IntPtr)info.DataPtr, frameData, 0, byteCount);
+
+                using (var bitmap = CanvasBitmap.CreateFromBytes(
+                    _canvasDevice, 
+                    frameData, 
+                    width, 
+                    height, 
+                    DirectXPixelFormat.B8G8R8A8UIntNormalized))
+                {
+                    session.DrawImage(bitmap);
+                }
+            }
+            _swapChain.Present();
         }
 
         private void EnsureSwapChain(int width, int height)

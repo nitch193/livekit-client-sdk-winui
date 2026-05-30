@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using LiveKit;
+using LiveKit.Client;
 using LiveKit.Proto;
+using LiveKit.Internal;
 
 class Program
 {
@@ -11,6 +13,7 @@ class Program
     const string TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjU0OTc4NDQsImlkZW50aXR5Ijoibml0ZXNoIiwiaXNzIjoiQVBJbVI5a1NRTlRqaXpoIiwibmJmIjoxNzY1NDgyODQ0LCJzdWIiOiJuaXRlc2giLCJ2aWRlbyI6eyJjYW5QdWJsaXNoIjp0cnVlLCJjYW5QdWJsaXNoRGF0YSI6dHJ1ZSwiY2FuU3Vic2NyaWJlIjp0cnVlLCJyb29tIjoidGVzdC1yb29tIiwicm9vbUpvaW4iOnRydWV9fQ.BwGwRsX4juL8kRyTuNrtwZ0tnSWSlnQxLwlxGLehRvM";
 
     static Room? _roomInstance;
+    static VideoStream? _teacherStream;
     static readonly HashSet<string> _teachers = new HashSet<string>();
     static readonly Dictionary<string, TrackSource> _trackSources = new Dictionary<string, TrackSource>();
 
@@ -52,6 +55,7 @@ class Program
 
             capturer.Dispose();
             track.Dispose();
+            _teacherStream?.Dispose();
             await _roomInstance.DisconnectAsync();
         }
         catch (Exception ex)
@@ -146,8 +150,24 @@ class Program
         {
             if (_roomInstance != null)
             {
-                await _roomInstance.GetVideoStreamAsync(trackHandle);
-                Console.WriteLine($"Requested video stream for track handle: {trackHandle}");
+                // Instantiate the high-level VideoStream that coordinates coalescing automatically
+                _teacherStream = new VideoStream(trackHandle);
+                _teacherStream.FrameReceived += (stream, frameBuffer) =>
+                {
+                    Console.WriteLine($"[Teacher Screen via VideoStream] Frame received: {frameBuffer.Info.Width}x{frameBuffer.Info.Height}, Timestamp: {frameBuffer.TimestampUs}");
+                    
+                    // In a UI/rendering application, you would do:
+                    // using (var frame = stream.Update()) // Consumes the latest coalesced frame
+                    // {
+                    //     if (frame != null)
+                    //     {
+                    //         await _videoRenderer.Render(frame.Info); // Await UI render thread copy
+                    //     }
+                    // }
+                };
+
+                Console.WriteLine($"Created high-level VideoStream for track handle: {trackHandle}");
+                await Task.CompletedTask;
             }
         }
         catch (Exception ex)
@@ -164,18 +184,11 @@ class Program
             // Log frame data
             Console.WriteLine($"[Teacher Screen] Frame received: {buffer.Info.Width}x{buffer.Info.Height}, Timestamp: {e.FrameReceived.TimestampUs}");
 
-            /* 
-             * Usage with SwapChainVideoRenderer (in a WinUI Window/Page):
-             * 
-             * 1. Initialize the renderer with your local SwapChainPanel:
-             *    _videoRenderer = new SwapChainVideoRenderer(mySwapChainPanel);
-             * 
-             * 2. In OnVideoStreamEventReceived:
-             *    _videoRenderer.Render(e.FrameReceived.Buffer.Info);
-             * 
-             * 3. Dispose when done:
-             *    _videoRenderer.Dispose();
-             */
+            // Explicitly wrap the low-level FFI frame buffer handle to drop it and avoid leaking memory
+            using (var handle = FfiHandle.FromOwnedHandle(buffer.Handle))
+            {
+                // Disposed cleanly at block exit
+            }
         }
     }
 }
